@@ -3,6 +3,8 @@ from torch import nn as nn
 from torch.nn import functional as F
 
 
+#https://github.com/wolny/pytorch-3dunet/blob/master/unet3d/losses.py
+
 def conv3d(in_channels, out_channels, kernel_size, bias, padding=1):
     return nn.Conv3d(in_channels, out_channels, kernel_size, padding=padding, bias=bias)
 

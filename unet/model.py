@@ -1,6 +1,6 @@
 import torch.nn as nn
 
-from model.components import Encoder, Decoder, DoubleConv, ExtResNetBlock, SingleConv
+from unet.components import Encoder, Decoder, DoubleConv, ExtResNetBlock, SingleConv
 
 # https://github.com/wolny/pytorch-3dunet/blob/master/unet3d/
 
@@ -10,7 +10,7 @@ def create_feature_maps(init_channel_number, number_of_fmaps):
 
 class UNet3D(nn.Module):
     """
-    3DUnet model from
+    3DUnet unet from
     `"3D U-Net: Learning Dense Volumetric Segmentation from Sparse Annotation"
         <https://arxiv.org/pdf/1606.06650.pdf>`.
     Args:
@@ -25,7 +25,7 @@ class UNet3D(nn.Module):
             of feature maps is given by the geometric progression: f_maps ^ k, k=1,2,3,4
         final_sigmoid (bool): if True apply element-wise nn.Sigmoid after the
             final 1x1 convolution, otherwise apply nn.Softmax. MUST be True if nn.BCELoss (two-class) is used
-            to train the model. MUST be False if nn.CrossEntropyLoss (multi-class) is used to train the model.
+            to train the unet. MUST be False if nn.CrossEntropyLoss (multi-class) is used to train the unet.
         layer_order (string): determines the order of layers
             in `SingleConv` module. e.g. 'crg' stands for Conv3d+ReLU+GroupNorm3d.
             See `SingleConv` for more info
@@ -112,9 +112,9 @@ class UNet3D(nn.Module):
 
 class ResidualUNet3D(nn.Module):
     """
-    Residual 3DUnet model implementation based on https://arxiv.org/pdf/1706.00120.pdf.
+    Residual 3DUnet unet implementation based on https://arxiv.org/pdf/1706.00120.pdf.
     Uses ExtResNetBlock instead of DoubleConv as a basic building block as well as summation joining instead
-    of concatenation joining. Since the model effectively becomes a residual net, in theory it allows for deeper UNet.
+    of concatenation joining. Since the unet effectively becomes a residual net, in theory it allows for deeper UNet.
     Args:
         in_channels (int): number of input channels
         out_channels (int): number of output segmentation masks;
@@ -127,7 +127,7 @@ class ResidualUNet3D(nn.Module):
             of feature maps is given by the geometric progression: f_maps ^ k, k=1,2,3,4,5
         final_sigmoid (bool): if True apply element-wise nn.Sigmoid after the
             final 1x1 convolution, otherwise apply nn.Softmax. MUST be True if nn.BCELoss (two-class) is used
-            to train the model. MUST be False if nn.CrossEntropyLoss (multi-class) is used to train the model.
+            to train the unet. MUST be False if nn.CrossEntropyLoss (multi-class) is used to train the unet.
         conv_layer_order (string): determines the order of layers
             in `SingleConv` module. e.g. 'crg' stands for Conv3d+ReLU+GroupNorm3d.
             See `SingleConv` for more info
