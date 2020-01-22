@@ -1,7 +1,10 @@
 import SimpleITK as sitk
 from pathlib import Path
 from torch.utils.data import DataLoader
-from torchio import Image, ImagesDataset, transforms, INTENSITY, LABEL, Queue
+from torchio.data.images import Image, ImagesDataset
+from torchio.transforms import transform
+from torchio import INTENSITY, LABEL
+from torchio.data.queue import Queue
 from torchio.data.inference import GridAggregator, GridSampler
 import torch
 import torchio
@@ -13,7 +16,8 @@ import multiprocessing as mp
 from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import trange
-from utils.labelsampler import RandomLabelSampler, LabelSampler
+from torchio.data.sampler.label import RandomLabelSampler, LabelSampler
+
 
 from torchio.transforms import (
     ZNormalization,
@@ -28,195 +32,94 @@ import torchvision
 from torchvision.transforms import Compose
 import unet.model
 import unet.loss
+import yaml
 
-import utils.misc
 
 def matplotlib_imshow(inputs, outputs, labels):
 
-    # tensor format BCHWD
-
+    # todo move to utils.misc
+    # Tensor format: BCHWD
     num_plots = inputs.size()[1] + outputs.size()[1] + labels.size()[1]
     fig, ax = plt.subplots(1, num_plots)
 
-    def _subplot_slice(n, img, title, cmap='gray'):
+    def _subplot_slice(n, img, title, cmap='gray', vmin=0.0, vmax=1.0):
         img = img.cpu().detach()
         # Select the slice in the middle ox the patch.
-        slice = img.size() // 2
-        npimg = img[:, :, slice].numpy()
-        ax[n].imshow(npimg, cmap=cmap)
+        #slice = img.size()[2] // 2
+        #npimg = img[:, :, slice].numpy()
+        npimg = img[:, :, :].numpy()
+        npimg = np.mean(npimg, axis=2)
+        ax[n].imshow(npimg, cmap=cmap, vmin=vmin, vmax=vmax)
         ax[n].axis('off')
         ax[n].set_title(title)
 
+    # Apply softmax activation.
+    normalization = nn.Softmax(dim=1)
+    outputs = normalization(outputs)
+
     i = 0
     for k in range(inputs.size()[1]):
-        _subplot_slice(i, inputs[0, k, ...], cmap='gray', title=f'input {k}')
+        _subplot_slice(i, inputs[0, k, ...], cmap='gray', title=f'input {k}', vmin=-3.0, vmax=3.0)
         i = i + 1
 
     for k in range(labels.size()[1]):
-        _subplot_slice(i, labels[0, k, ...], cmap='inferno', title=f'label {k}')
+        _subplot_slice(i, labels[0, k, ...], cmap='viridis', title=f'label {k}', vmin=0.0, vmax=1.0)
         i = i + 1
 
     for k in range(outputs.size()[1]):
-        _subplot_slice(i, outputs[0, k, ...], cmap='inferno', title=f'output {k}')
+        _subplot_slice(i, outputs[0, k, ...], cmap='viridis', title=f'output {k}', vmin=0.0, vmax=1.0)
         i = i + 1
 
     plt.tight_layout()
 
     return fig
 
-def test():
-    return
-
-
-def predict():
-    subjects_list = get_subjects()
-
-    transforms = (
-        ZNormalization(),
-        RandomNoise(std_range=(0, 0.25)),
-        RandomAffine(scales=(0.9, 1.1), degrees=10),
-        RandomFlip(axes=(0,)),
-    )
-    transform = Compose(transforms)
-    subjects_dataset = ImagesDataset(subjects_list, transform)
-
-    img = subjects_dataset[0]['mri']['data'].numpy()
-
-    patch_size = 96, 96, 96
-    patch_overlap = 2, 2, 2
-    batch_size = 4
-    sample = subjects_dataset[0]
-    sampler = LabelSampler(sample, patch_size)
-    patch = sampler.extract_patch(sample, patch_size)
-
-    writer = SummaryWriter('runs/test')
-    #grid = torchvision.utils2.make_grid(patch['mri']['data'][0, ...].max(dim=0)[0])
-    #writer.add_image('test', patch['mri']['data'][0, :, 50, :], 0, dataformats='HW')
-    writer.add_figure('new', matplotlib_imshow(patch))
-    writer.close()
-
-    print()
-    plt.imshow(patch['mri']['data'][0, ...].mean(dim=0))
-    plt.show()
-    plt.imshow(np.max(patch['label']['data'][0, ...].numpy(), axis=0))
-    plt.show()
-
-    return
-    grid_sampler = GridSampler(img[0, :, :, :], patch_size, patch_overlap)
-    patch_loader = DataLoader(grid_sampler, batch_size=batch_size)
-
-    patch = next(iter(patch_loader))
-
-
-    #print(patch['image'].shape)
-    plt.imshow(patch['image'][0, 0, :, 50, :])
-    plt.show()
-
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-    # Assuming that we are on a CUDA machine, this should print a CUDA device:
-    print(device)
-
-
-
-    #unet = model.UNet3D(in_channels=1, out_channels=1,
-    #                    final_sigmoid=True,
-    #                    f_maps=64)
-
-    # use multiple gpus
-    # if torch.cuda.device_count() > 1:
-    #    print("Let's use", torch.cuda.device_count(), "GPUs!")
-    #    # dim = 0 [30, xxx] -> [10, ...], [10, ...], [10, ...] on 3 GPUs
-    #    unet = nn.DataParallel(unet)
-
-    #unet.to(device)
-
-    #input = patch['image'].to(device)
-
-def evaluate():
-
-    subjects_list = get_subjects()
-
-    transforms = (
-        ZNormalization(),
-        RandomNoise(std_range=(0, 0.25)),
-        RandomAffine(scales=(0.9, 1.1), degrees=10),
-        RandomFlip(axes=(0,)),
-    )
-    transform = Compose(transforms)
-    subjects_dataset = ImagesDataset(subjects_list, transform)
-
-    img = subjects_dataset[0]['mri']['data'].numpy()
-
-    patch_size = 96, 96, 96
-    patch_overlap = 4, 4, 4
-    batch_size = 6
-    CHANNELS_DIMENSION = 1
-
-    net = unet.model.ResidualUNet3D(in_channels=1, out_channels=1,
-                            final_sigmoid=True,
-                            f_maps=64)
-
-
-    checkpoint = torch.load('/mnt/share/raheppt1/pytorch_models/model2.pt')
-    net.load_state_dict(checkpoint['model_state_dict'])
-    epoch = checkpoint['epoch']
-    print(epoch)
-    loss = checkpoint['loss']
-    net.eval()
-
-    # Select GPU with CUDA_VISIBLE_DEVICES=x python main.py
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-    # Assuming that we are on a CUDA machine, this should print a CUDA device:
-    print(device)
-    net.to(device)
-
-    patch_overlap = 4, 4, 4
-    grid_sampler = GridSampler(img[0,:,:,:], patch_size, patch_overlap)
-    patch_loader = DataLoader(grid_sampler, batch_size=batch_size)
-    aggregator = GridAggregator(img[0,:,:,:], patch_overlap)
-
-    with torch.no_grad():
-        for patches_batch in tqdm(patch_loader):
-            input_tensor = patches_batch['image'].to(device)
-            locations = patches_batch['location']
-            logits = net(input_tensor)  # some unet
-
-            sigmoid_fnc = torch.nn.Sequential(
-                torch.nn.Sigmoid())
-            logits = sigmoid_fnc(logits)
-
-            #plt.imshow(logits[0, 0, :, 50, :].cpu().detach())
-            #plt.show()
-            aggregator.add_batch(logits, locations)
-
-    output_array = aggregator.output_array
-    print(output_array.shape)
-    plt.imshow(np.max(img[0, :, :, :], axis=2), cmap='gray')
-    plt.imshow(np.mean(output_array, axis=2), alpha = 0.6)
-    plt.show()
-
+# class AttrDict(dict):
+#     def __init__(self, *args, **kwargs):
+#         super(AttrDict, self).__init__(*args, **kwargs)
+#         self.__dict__ = self
+#
+#
+# if __name__ == '__main__':
+#     config = AttrDict()
+#     config.learning_rate = 0.0001
+#     config.cv = 'CA'
+#     config.method = ''
+#     config.exp_name = 'exp_1'
+#     config.batch_size = 8
+#     config.max_iter = 10000
+#     config.image_size = [124] * 3
+#     config.image_spacing = [1] * 3
+#
+#     config.test_iter = 100
+#     config.disp_iter = 10
+#     config.snapshot_iter = 1000
 
 def _extract_tensors(batch):
 
+    # todo move definitions elsewhere
     img_names = ['mri']
     label_names = ['label', 'label2']
 
+    # Concat inputs and targets along the channel dimensions
     targets = torch.cat([batch[key]['data'] for key in label_names], dim=1)
     inputs = torch.cat([batch[key]['data'] for key in img_names], dim=1)
 
+    # Add background label as first channel.
+    targets_background = torch.max(targets, dim=1, keepdim=True)[0]
+    targets_background = (-1) * (targets_background - 1)
+    targets = torch.cat([targets_background, targets], dim=1)
+
     return inputs, targets
 
-
-def create_datasets():
+def _get_subjects():
     work_dir = Path('/mnt/share/raheppt1/MelanomCT_Organ/')
 
-    path_labels = list(work_dir.glob('**/*liver_3mm*'))
+    path_labels = list(work_dir.glob('**/*liver_3mm_low*'))
     path_labels.sort()
-    path_labels2 = list(work_dir.glob('**/*spleen_3mm*'))
+    path_labels2 = list(work_dir.glob('**/*spleen_3mm_low*'))
     path_labels2.sort()
-    path_images = list(work_dir.glob('**/*ct_3mm*'))
+    path_images = list(work_dir.glob('**/*ct_3mm_low*'))
     path_images.sort()
 
     paths = zip(path_images, path_labels, path_labels2)
@@ -229,6 +132,10 @@ def create_datasets():
             Image('label', str(path[1]), LABEL),
             Image('label2', str(path[2]), LABEL)
         ])
+    return subjects_list
+
+def _create_datasets():
+    subjects_list = _get_subjects()
 
     # Define transforms for data normalization and augmentation.
     transforms = (
@@ -247,82 +154,106 @@ def create_datasets():
 
 # Random patch sampling (define the frequency for each label class).
 class PatchSampler(RandomLabelSampler):
-    label_distribution = {'label': 0.3, 'label2': 0.5}
+    label_distribution = {'label': 0.3, 'label2': 0.6}
 
 
 def train():
-    
-    print_interval = 10
+    config = {}
+    config['print_interval'] = 10
+    config['log_dir'] = './runs'
+    config['patch_size'] = (96, 96, 96)
+    config['max_epochs'] = 300
+    config['learning_rate'] = 0.0001
+    config['model_path'] = '/mnt/share/raheppt1/pytorch_models'
+    config['train'] = {'batch_size': 4, 'queue': {}}
+    config['train']['queue'] = {'max_length': 300,
+                                'samples_per_volume': 30,
+                                'num_workers': 0,
+                                'shuffle_subjects': False,
+                                'shuffle_patches': True}
 
-    log_dir = Path('runs/')
+    config['eval'] = {'batch_size': 4,
+                      'queue': {}}
+    config['eval']['queue'] = {'max_length': 300,
+                               'samples_per_volume': 30,
+                               'num_workers': 0,
+                               'shuffle_subjects': False,
+                               'shuffle_patches': True}
 
+    config['model'] = {'in_channels': 1,
+                       'out_channels': 3,
+                       'fmaps': 64}
+
+    with open("./config.yaml", "w") as f:
+        yaml.dump(config, f)
+
+    model_path = Path(config['model_path'])
+    patch_size = config['patch_size']
+    print_interval = config['print_interval']
+    log_dir = Path(config['log_dir'])
+
+    # Initialize tensorboard writer.
     import datetime
     ts = datetime.datetime.now().timestamp()
     readable = datetime.datetime.fromtimestamp(ts).isoformat()
     log_dir = str(log_dir.joinpath('log_' + readable))
     writer = SummaryWriter(log_dir)
 
-    model_path = Path('/mnt/share/raheppt1/pytorch_models')
-
     # Create training and evaluation datasets.
-    train_dataset, eval_dataset = create_datasets()
+    train_dataset, eval_dataset = _create_datasets()
 
+    # todo move to _create datasets
     # Define the dataset as a queue of patches.
-    workers = range(mp.cpu_count() + 1)
-    print(f'#{workers} workers available')
-    patch_size = (96, 96, 32)
-
     train_queue = Queue(
         train_dataset,
-        max_length=300,
-        samples_per_volume=50, # 30
+        max_length=config['train']['queue']['max_length'],
+        samples_per_volume=config['train']['queue']['samples_per_volume'],
         patch_size=patch_size,
         sampler_class=PatchSampler,
-        num_workers=0,
-        shuffle_subjects=False,
-        shuffle_patches=True
+        num_workers=config['train']['queue']['num_workers'],
+        shuffle_subjects=config['train']['queue']['shuffle_subjects'],
+        shuffle_patches=config['train']['queue']['shuffle_patches']
     )
-    train_loader = DataLoader(train_queue, batch_size=4)
+    train_loader = DataLoader(train_queue, batch_size=config['train']['batch_size'])
 
     eval_queue = Queue(
         eval_dataset,
-        max_length=300,
-        samples_per_volume=50, # 30
+        max_length=config['eval']['queue']['max_length'],
+        samples_per_volume=config['eval']['queue']['samples_per_volume'],
         patch_size=patch_size,
         sampler_class=PatchSampler,
-        num_workers=0,
-        shuffle_subjects=False,
-        shuffle_patches=False
+        num_workers=config['eval']['queue']['num_workers'],
+        shuffle_subjects=config['eval']['queue']['shuffle_subjects'],
+        shuffle_patches=config['eval']['queue']['shuffle_patches']
     )
-    eval_loader = DataLoader(eval_queue, batch_size=4)
+    eval_loader = DataLoader(eval_queue, batch_size=config['eval']['batch_size'])
 
     # Check cuda device.
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'Using {device}')
 
-    # Restore
+    # todo restore
     b_restore = False
     if b_restore:
         print('Loading checkpoint ...')
 
     # Create model and send it to GPU.
-    net = unet.model.ResidualUNet3D(in_channels=1, out_channels=2,
+    net = unet.model.ResidualUNet3D(in_channels=1, out_channels=3,
                                     final_sigmoid=False,
                                     f_maps=64)
     net.to(device)
 
     # Initialize optimizer and loss function.
-    optimizer = torch.optim.Adam(params=net.parameters(), lr=0.001)
-    criterion = unet.loss.DiceLossB(sigmoid_normalization=True)
+    optimizer = torch.optim.Adam(params=net.parameters(), lr=config['learning_rate'])
+    criterion = unet.loss.DiceLossB(sigmoid_normalization=False)
 
-    num_epochs = 10
+    max_epochs = config['max_epochs']
     finished_epochs = 0
-    num_epochs = num_epochs - finished_epochs
+    max_epochs = max_epochs - finished_epochs
 
     print(f'Training started with epoch {finished_epochs+1}...')
-
     start = time.time()
-    for epoch in range(finished_epochs, num_epochs):
+    for epoch in range(finished_epochs, max_epochs):
         # Initialize parameters.
         start_time = time.time()
         eval_loss_min = 0.0
@@ -349,6 +280,7 @@ def train():
             step = step + 1
 
             if step % print_interval == (print_interval-1):
+                # todo move to function
                 print('[%d, %4d] loss: %.3f' %
                       (epoch + 1, step + 1, running_loss / print_interval))
 
@@ -399,13 +331,9 @@ def train():
                 str(model_path.joinpath('chkpt_model.pt')))
 
     print('Time:', int(time.time() - start), 'seconds')
-    print()
-
 
 def main():
     train()
-
-
 
 if __name__ == "__main__":
     main()
