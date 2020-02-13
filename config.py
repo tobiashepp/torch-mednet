@@ -3,18 +3,21 @@ from pathlib import Path
 from torchio.data.images import Image, ImagesDataset
 from torchio import INTENSITY, LABEL
 
-# todo add verbose
+# todo add verbose, define yaml file externally
 class Config:
-    def __init__(self):
+    def __init__(self, conf='./config.yaml'):
 
         # Data.
-        self.data_dir = ''
+        self.train_dir = ''
+        self.test_dir = ''
         self.images = []
         self.labels = []
+        self.validation_split = 1
 
         # Training parameters.
         self.learning_rate = 0.0001
         self.max_epochs = 300
+        self.loss = 'DICE'
 
         # Model configuration and path to save checkpoints.
         self.model_path = '/mnt/share/raheppt1/pytorch_models/seg'
@@ -37,12 +40,12 @@ class Config:
                       'shuffle_subjects': False,
                       'shuffle_patches': True}
 
-        self._parse_from_yaml('./config.yaml')
+        self._parse_from_yaml(conf)
 
-    def parse_subjects(self):
+    def parse_subjects(self, work_dir):
 
         # Parse images and labels.
-        work_dir = Path(self.data_dir)
+        work_dir = Path(str(work_dir))
         paths = []
         num_subjects = set()
         names = {'images': [], 'labels': []}
@@ -64,7 +67,8 @@ class Config:
         for lbl in self.labels:
             # Collect label names and probabilites to sample from this label.
             names['labels'].append(lbl['name'])
-            prob += lbl['prob']
+            if 'prob' in lbl.keys():
+                prob += lbl['prob']
             label_distribution[lbl['name']] = prob
             # Get sorted file list and append to paths.
             files = [str(file) for file in work_dir.glob(lbl['pattern'])]
@@ -100,9 +104,15 @@ class Config:
         with open(config_path) as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
 
-            # Training parameters.
-            if 'data_dir' in data.keys():
-                self.data_dir = data['data_dir']
+            # Data directories.
+            if 'train_dir' in data.keys():
+                self.train_dir = data['train_dir']
+            if 'test_dir' in data.keys():
+                self.test_dir = data['test_dir']
+
+            # Validation split.
+            if 'validation_split' in data.keys():
+                self.validation_split = data['validation_split']
 
             # Images.
             if 'images' in data.keys():
@@ -111,14 +121,14 @@ class Config:
             # Labels.
             if 'labels' in data.keys():
                 self.labels = data['labels']
-                print(self.labels)
 
             # Training parameters.
             if 'learning_rate' in data.keys():
                 self.learning_rate = data['learning_rate']
-
             if 'max_epochs' in data.keys():
                 self.max_epochs = data['max_epochs']
+            if 'loss' in data.keys():
+                self.loss = data['loss']
 
             # Model configuration and path to save checkpoints.
             if 'model_path' in data.keys():
@@ -156,8 +166,8 @@ class Config:
 
 
 def main():
-    config = Config()
-    res = config.parse_subjects()
+    config = Config(conf='./config/ctorgan_config.yaml')
+    res = config.parse_subjects(config.train_dir)
     subjects_list = res['subjects_list']
     print(res['label_distribution'])
     print(res['names'])
@@ -168,6 +178,7 @@ def main():
             if torchio.utils.is_image_dict(val):
                 print(val['stem'], val['data'].size())
         print()
+        # todo consistency check
 
 
 if __name__ == '__main__':

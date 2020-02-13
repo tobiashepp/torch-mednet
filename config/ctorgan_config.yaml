@@ -1,29 +1,36 @@
 # Define input channels.
-data_dir: '/mnt/share/raheppt1/BClesions/tumor/'
+train_dir: '/mnt/share/raheppt1/MelanomCT_Organ/'
+validation_split: 40
+
 images:
   -
-    name: pet
-    pattern: '**/*petsuv*nii*'
-  -
     name: ct
-    pattern: '**/*rs*ct*nii'
+    pattern: '**/*ct*3mm_low.nii*'
 
 # Define labels.
 labels:
+  - name: liver
+    pattern: '**/*liver*3mm_low.nii*'
+    prob: 0.3
   -
-    name: tumor
-    pattern: '**/iso*tumor*'
-    prob: 0.5
+    name: spleen
+    pattern: '**/*spleen*3mm_low.nii*'
+    prob: 0.2
+  -
+    name: spine
+    pattern: '**/*spine*3mm_low.nii*'
+    prob: 0.2
+
 
 # Model configuration and path to save checkpoints:
 model_path: '/mnt/share/raheppt1/pytorch_models/seg'
 model:
-  in_channels: 2
-  out_channels: 2 # including one channel for the background!
+  in_channels: 1
+  out_channels: 4 # including one channel for the background!
   f_maps: 64
 
 # Tensorboard logging:
-run: petbc
+run: ctorgan
 log_dir: './runs'
 print_interval: 10
 
@@ -41,7 +48,7 @@ queue:
 # Training parameters:
 learning_rate: 0.0001
 max_epochs: 300
-
+loss: 'DICE' # in ['DICE', 'CE']
 
 # work_dir = Path('/mnt/share/raheppt1/MelanomCT_Organ/')
 #path_labels = list(work_dir.glob('**/*liver_3mm_low*'))

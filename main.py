@@ -25,27 +25,35 @@ import unet.model
 import unet.loss
 from utils.misc import  matplotlib_imshow
 from config import Config
-
+import random
+# todo reweighted loss
 
 class Trainer:
 
     def __init__(self,
-                 config=None):
+                 config=None,
+                 b_restore=False,
+                 b_shuffle_subjects=False):
 
         if not config:
             self.config = Config()
+        else:
+            self.config = config
 
         self.run_name = self.config.run
 
         # Parse subjects.
-        subjects_parser = self.config.parse_subjects()
+        subjects_parser = self.config.parse_subjects(self.config.train_dir)
         subjects_list = subjects_parser['subjects_list']
+        if b_shuffle_subjects:
+            subjects_list = random.shuffle(subjects_list)
         self.label_distribution = subjects_parser['label_distribution']
         self.img_names = subjects_parser['names']['images']
         self.label_names = subjects_parser['names']['labels']
 
         # Create training and evaluation datasets, queues.
-        train_dataset, eval_dataset = self._create_datasets(subjects_list)
+        train_dataset, eval_dataset = self._create_datasets(subjects_list,
+                                                            self.config.validation_split)
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
         self._generate_queues()
@@ -67,18 +75,19 @@ class Trainer:
         # Initialize optimizer and loss function.
         self.optimizer = torch.optim.Adam(params=self.net.parameters(),
                                           lr=self.config.learning_rate)
-        self.criterion = unet.loss.DiceLossB(sigmoid_normalization=False)
+        if self.config.loss == 'CE':
+            self.criterion = unet.loss.WeightedCrossEntropyLoss()
+        else:
+            self.criterion = unet.loss.DiceLoss(sigmoid_normalization=False)
 
-        # todo test restore
         # Restore from checkpoint?
-        b_restore = False
         self.start_epoch = 0
         self.eval_loss_min = None
         if b_restore:
             self.start_epoch, self.eval_loss_min = self._restore_model()
 
     @staticmethod
-    def _create_datasets(subjects_list):
+    def _create_datasets(subjects_list, validation_split):
 
         # todo add data augmentation to config
         # Define transforms for data normalization and augmentation.
@@ -90,9 +99,10 @@ class Trainer:
         transform = Compose(transforms)
 
         # Define datasets.
-        # todo split dataset to config
-        train_dataset = ImagesDataset(subjects_list[:200], transform)
-        eval_dataset = ImagesDataset(subjects_list[200:], transform=ZNormalization())
+        train_dataset = ImagesDataset(subjects_list[:validation_split],
+                                      transform)
+        eval_dataset = ImagesDataset(subjects_list[validation_split:],
+                                     transform=ZNormalization())
 
         return train_dataset, eval_dataset
 
@@ -163,9 +173,9 @@ class Trainer:
         checkpoint = torch.load(str(model_path))
         self.net.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        finished_epochs = checkpoint['epoch']
+        start_epoch = checkpoint['epoch']
         eval_loss_min = checkpoint['loss']
-        return finished_epochs, eval_loss_min
+        return start_epoch, eval_loss_min
 
     def _extract_tensors(self, batch):
         # Concat inputs and targets along the channel dimensions
@@ -274,13 +284,15 @@ class Trainer:
                 eval_loss_min = eval_loss
             if eval_loss < eval_loss_min or epoch == 0:
                 eval_loss_min = eval_loss
-                self._save_model(epoch, eval_loss)
+                self._save_model(epoch + 1, eval_loss)
 
         print('Time:', int(time.time() - start), 'seconds')
 
 
 def main():
-    trainer = Trainer()
+    b_restore = False
+    config = Config(conf='./config/ctorgan_config.yaml')
+    trainer = Trainer(config, b_restore)
     trainer.run()
 
 
