@@ -11,7 +11,6 @@ from torchvision.transforms import Compose
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from torchio.data.sampler.label import RandomLabelSampler, LabelSampler
 from torchio.data.images import Image, ImagesDataset
 from torchio.data.queue import Queue
 from torchio.transforms import (
@@ -21,12 +20,16 @@ from torchio.transforms import (
     RandomAffine,
 )
 
-import unet.model
-import unet.loss
-from utils.misc import  matplotlib_imshow
-from config import Config
+import midasmednet.unet as unet
+import midasmednet.unet.model
+import midasmednet.unet.loss
+from   midasmednet.utils.misc import  matplotlib_imshow
+from   midasmednet.utils.sampler import RandomLabelSampler, LabelSampler
+from   midasmednet.utils.config import Config
 import random
 # todo reweighted loss
+# todo data augmentation to config file
+# todo read file list from csv
 
 class Trainer:
 
@@ -46,7 +49,7 @@ class Trainer:
         subjects_parser = self.config.parse_subjects(self.config.train_dir)
         subjects_list = subjects_parser['subjects_list']
         if b_shuffle_subjects:
-            subjects_list = random.shuffle(subjects_list)
+            random.shuffle(subjects_list)
         self.label_distribution = subjects_parser['label_distribution']
         self.img_names = subjects_parser['names']['images']
         self.label_names = subjects_parser['names']['labels']
@@ -66,19 +69,19 @@ class Trainer:
         print(f'Using {self.device}')
 
         # Create model and send it to GPU.
-        self.net = unet.model.ResidualUNet3D(in_channels=self.config.model['in_channels'],
-                                             out_channels=self.config.model['out_channels'],
-                                             final_sigmoid=False,
-                                             f_maps=self.config.model['f_maps'])
+        self.net = midasmednet.unet.model.ResidualUNet3D(in_channels=self.config.model['in_channels'],
+                                                         out_channels=self.config.model['out_channels'],
+                                                         final_sigmoid=False,
+                                                         f_maps=self.config.model['f_maps'])
         self.net.to(self.device)
 
         # Initialize optimizer and loss function.
         self.optimizer = torch.optim.Adam(params=self.net.parameters(),
                                           lr=self.config.learning_rate)
         if self.config.loss == 'CE':
-            self.criterion = unet.loss.WeightedCrossEntropyLoss()
+            self.criterion = midasmednet.unet.loss.WeightedCrossEntropyLoss()
         else:
-            self.criterion = unet.loss.DiceLoss(sigmoid_normalization=False)
+            self.criterion = midasmednet.unet.loss.DiceLoss(sigmoid_normalization=False)
 
         # Restore from checkpoint?
         self.start_epoch = 0
@@ -237,7 +240,7 @@ class Trainer:
                 logits = self.net(inputs)
                 # Calculate loss.
                 outputs = nn.Softmax(dim=1)(logits)
-                per_channel_dice += unet.loss.compute_per_channel_dice(outputs, targets)
+                per_channel_dice += midasmednet.unet.loss.compute_per_channel_dice(outputs, targets)
                 # Calculate metrics.
                 loss = self.criterion(logits, targets)
                 running_loss += loss.item()

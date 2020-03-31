@@ -1,6 +1,6 @@
 import torch.nn as nn
 
-from unet.components import Encoder, Decoder, DoubleConv, ExtResNetBlock, SingleConv
+from midasmednet.unet.components import Encoder, Decoder, DoubleConv, ExtResNetBlock, SingleConv
 
 # https://github.com/wolny/pytorch-3dunet/blob/master/unet3d/
 

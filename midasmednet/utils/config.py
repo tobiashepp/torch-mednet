@@ -61,7 +61,7 @@ class Config:
                           for file in files])
 
         # Convert label probablities (e.g. label0 0.5 label 1 0.3) to
-        # cumulative probabilites (e.g. 0.5 and 0.8). So uniform random
+        # cumulative probabilites (e.g. 0.5 and 0.8). So that uniform random
         # samples from [0,1) can be used to selected the label name.
         prob = 0
         for lbl in self.labels:
