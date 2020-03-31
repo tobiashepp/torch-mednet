@@ -294,7 +294,7 @@ class Trainer:
 
 def main():
     b_restore = False
-    config = Config(conf='./config/ctorgan_config.yaml')
+    config = Config(conf='./config/aortath.yaml')
     trainer = Trainer(config, b_restore)
     trainer.run()
 

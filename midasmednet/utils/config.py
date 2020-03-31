@@ -42,10 +42,16 @@ class Config:
 
         self._parse_from_yaml(conf)
 
+    def get_files_from_list(self, csv_path):
+        with open(csv_path) as csv_file:
+            files = csv_file.readlines()
+            files = [str(Path(self.train_dir).joinpath(x.strip())) for x in files]
+        return files
+
     def parse_subjects(self, work_dir):
 
         # Parse images and labels.
-        work_dir = Path(str(work_dir))
+        work_dir = Path(work_dir)
         paths = []
         num_subjects = set()
         names = {'images': [], 'labels': []}
@@ -54,8 +60,12 @@ class Config:
             # Collect image names.
             names['images'].append(img['name'])
             # Get sorted file list and append to paths.
-            files = [str(file) for file in work_dir.glob(img['pattern'])]
-            files.sort()
+            if 'pattern' in img.keys():
+                files = [str(file) for file in work_dir.glob(img['pattern'])]
+                files.sort()
+            elif 'list' in img.keys():
+                files = self.get_files_from_list(img['list'])
+                        
             num_subjects.add(len(files))
             paths.append([{'name': img['name'], 'type': INTENSITY, 'path': file}
                           for file in files])
@@ -71,8 +81,12 @@ class Config:
                 prob += lbl['prob']
             label_distribution[lbl['name']] = prob
             # Get sorted file list and append to paths.
-            files = [str(file) for file in work_dir.glob(lbl['pattern'])]
-            files.sort()
+            if 'pattern' in lbl.keys():
+                files = [str(file) for file in work_dir.glob(lbl['pattern'])]
+                files.sort()
+            elif 'list' in img.keys():
+                files = self.get_files_from_list(lbl['list'])
+
             num_subjects.add(len(files))
             paths.append([{'name': lbl['name'], 'type': LABEL, 'path': file}
                           for file in files])
@@ -166,7 +180,8 @@ class Config:
 
 
 def main():
-    config = Config(conf='./config/ctorgan_config.yaml')
+    config = Config(
+        conf='/home/raheppt1/projects/mednet/config/aortath.yaml')
     res = config.parse_subjects(config.train_dir)
     subjects_list = res['subjects_list']
     print(res['label_distribution'])
