@@ -108,13 +108,45 @@ class LabelSampler(ImageSampler):
             patch_min, patch_max = self.get_random_indices(sample, patch_size, idx=None)
 
         # Extracts the patch with indices from patch_min:patch_max.
+        # todo new cropping routine
         cropped_sample = self.copy_and_crop(
             sample,
             patch_min,
             patch_max)
-        cropped_sample['selected_label'] = lbl_name
         return cropped_sample
 
+
+
+
+
+
+
+
+        def copy_and_crop(
+            self,
+            sample: dict,
+            index_ini: np.ndarray,
+            index_fin: np.ndarray,
+        ) -> dict: cropped_sample = {}
+        for key, value in sample.items():
+            cropped_sample[key] = copy.copy(value)
+            if is_image_dict(value):
+                sample_image_dict = value
+                cropped_image_dict = cropped_sample[key]
+                cropped_image_dict[DATA] = crop(
+                    sample_image_dict[DATA], index_ini, index_fin)
+        # torch doesn't like uint16
+        cropped_sample['index_ini'] = index_ini.astype(int)
+        return cropped_sample
+
+        def crop(
+            image: Union[np.ndarray, torch.Tensor],
+            index_ini: np.ndarray,
+            index_fin: np.ndarray,
+        ) -> Union[np.ndarray, torch.Tensor]:
+        i_ini, j_ini, k_ini = index_ini
+        i_fin, j_fin, k_fin = index_fin
+        return image[..., i_ini:i_fin, j_ini:j_fin, k_ini:k_fin]
 
 class RandomLabelSampler(LabelSampler):
 

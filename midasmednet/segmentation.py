@@ -1,5 +1,6 @@
 import datetime
 import time
+import shutil
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -24,15 +25,16 @@ from torchio.transforms import (
 import midasmednet.unet as unet
 import midasmednet.unet.model
 import midasmednet.unet.loss
-from   midasmednet.utils.misc import  matplotlib_imshow
-from   midasmednet.utils.sampler import RandomLabelSampler, LabelSampler
-from   midasmednet.utils.config import Config
+from midasmednet.utils.misc import matplotlib_imshow
+from midasmednet.utils.sampler import RandomLabelSampler, LabelSampler
+from midasmednet.utils.config import Config
 import random
+
+# global todo list
 # todo reweighted loss
 # todo data augmentation to config file
-# todo read file list from csv
 
-class Trainer:
+class SegmentationTrainer:
 
     def __init__(self,
                  config=None,
@@ -66,7 +68,8 @@ class Trainer:
         self.writer = self._init_writer()
 
         # Check cuda device.
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(
+            "cuda:0" if torch.cuda.is_available() else "cpu")
         print(f'Using {self.device}')
 
         # Create model and send it to GPU.
@@ -80,16 +83,11 @@ class Trainer:
         self.optimizer = torch.optim.Adam(params=self.net.parameters(),
                                           lr=self.config.learning_rate)
         if self.config.loss == 'CE':
-            self.mode = 'segmentation'
             self.criterion = midasmednet.unet.loss.WeightedCrossEntropyLoss()
         elif self.config.loss == 'DICE':
-            self.mode = 'segmentation'
             self.criterion = midasmednet.unet.loss.DiceLoss(
                 sigmoid_normalization=False)
-        elif self.config.loss == 'LANDMARKS':
-            self.mode = 'landmark'
-            self.criterion = midasmednet.unet.loss.LandmarkLoss(1.0)
-
+     
         # Restore from checkpoint?
         self.start_epoch = 0
         self.eval_loss_min = None
@@ -138,7 +136,8 @@ class Trainer:
             shuffle_subjects=self.config.queue['shuffle_subjects'],
             shuffle_patches=self.config.queue['shuffle_patches']
         )
-        self.train_loader = DataLoader(train_queue, batch_size=self.config.train_batchsize)
+        self.train_loader = DataLoader(
+            train_queue, batch_size=self.config.train_batchsize)
 
         eval_queue = Queue(
             self.eval_dataset,
@@ -150,7 +149,8 @@ class Trainer:
             shuffle_subjects=self.config.queue['shuffle_subjects'],
             shuffle_patches=self.config.queue['shuffle_patches']
         )
-        self.eval_loader = DataLoader(eval_queue, batch_size=self.config.eval_batchsize)
+        self.eval_loader = DataLoader(
+            eval_queue, batch_size=self.config.eval_batchsize)
 
     def _init_writer(self):
         ts = datetime.datetime.now().timestamp()
@@ -160,6 +160,7 @@ class Trainer:
             log_dir = log_dir.joinpath('log_' + self.run_name)
         else:
             log_dir = log_dir.joinpath('log_' + readable)
+        shutil.rmtree(log_dir)
         writer = SummaryWriter(str(log_dir))
         return writer
 
@@ -187,26 +188,18 @@ class Trainer:
         eval_loss_min = checkpoint['loss']
         return start_epoch, eval_loss_min
 
-    # todo adapt not one hot encoded
     def _extract_tensors(self, batch):
         # Concat inputs and targets along the channel dimensions
-        targets = torch.cat([batch[key]['data'] for key in self.label_names], dim=1)
-        inputs = torch.cat([batch[key]['data'] for key in self.img_names], dim=1)
+        targets = torch.cat([batch[key]['data']
+                             for key in self.label_names], dim=1)
+        inputs = torch.cat([batch[key]['data']
+                            for key in self.img_names], dim=1)
 
-        # Segmentation mode
         # Add background label as first channel.
-        if self.mode == 'segmentation':
-            targets_background = torch.max(targets, dim=1, keepdim=True)[0]
-            targets_background = (-1) * (targets_background - 1)
-            targets = torch.cat([targets_background, targets], dim=1)
-        elif self.mode == 'landmark':
-            targets_background = torch.max(targets[:,1:,...], dim=1, keepdim=True)[0]
-            targets_background = (-1) * (targets_background - 1)
-            targets = torch.cat([targets[:, [0], ...], 
-                                 targets_background, 
-                                 targets[:, 1:, ...]], dim=1)
-        # Landmark mode
-        # targets[0] regression heat map, targets[1] label encoded map
+        targets_background = torch.max(targets, dim=1, keepdim=True)[0]
+        targets_background = (-1) * (targets_background - 1)
+        targets = torch.cat([targets_background, targets], dim=1)
+
         return inputs, targets
 
     def _train_epoch(self, epoch):
@@ -219,7 +212,7 @@ class Trainer:
             inputs, targets = self._extract_tensors(batch)
             inputs = inputs.to(self.device)
             targets = targets.to(self.device)
-           
+
             # Training step.
             self.optimizer.zero_grad()
             logits = self.net(inputs)
@@ -242,14 +235,10 @@ class Trainer:
                 self.writer.add_figure('Sample', matplotlib_imshow(inputs, logits, targets),
                                        global_step=global_step)
                 running_loss = 0.0
-          
-            
 
-    
     def _evaluate(self, epoch):
         running_loss = 0.0
         per_channel_dice = 0.0
-        mse_loss = 0.0
         self.net.eval()
         with torch.no_grad():
             for step, batch in enumerate(tqdm(self.eval_loader)):
@@ -261,35 +250,22 @@ class Trainer:
                 logits = self.net(inputs)
                 # Calculate metrics.
                 loss = self.criterion(logits, targets)
-                
-                if self.mode == 'segmentation':
-                    running_loss += loss.item()
-                    outputs = nn.Softmax(dim=1)(logits)
-                    per_channel_dice += midasmednet.unet.loss.compute_per_channel_dice(
-                        outputs, targets)
-                elif self.mode == 'landmark':
-                    running_loss += loss
-                    mse_loss += torch.nn.functional.mse_loss(
-                        logits[:, 0, ...], targets[:, 0, ...])
-                
-
+                running_loss += loss.item()
+                outputs = nn.Softmax(dim=1)(logits)
+                per_channel_dice += midasmednet.unet.loss.compute_per_channel_dice(
+                    outputs, targets)
+    
         # Compute mean loss/dice metrics and log to tensorboard.
         eval_loss = running_loss / len(self.eval_loader)
         self.writer.add_scalar('Loss/eval',
                                eval_loss,
                                global_step=epoch + 1)
 
-        mse_loss = mse_loss / len(self.eval_loader)
-        self.writer.add_scalar('MSE/eval',
-                               mse_loss,
-                               global_step=epoch + 1)
-
-        if self.mode == 'segmentation':
-            per_channel_dice = per_channel_dice/len(self.eval_loader)
-            for k in range(per_channel_dice.size()[0]):
-                self.writer.add_scalar(f'Dice/label{k}',
-                                       per_channel_dice[k],
-                                       global_step=epoch+1)
+        per_channel_dice = per_channel_dice/len(self.eval_loader)
+        for k in range(per_channel_dice.size()[0]):
+            self.writer.add_scalar(f'Dice/label{k}',
+                                    per_channel_dice[k],
+                                    global_step=epoch+1)
         return eval_loss
 
     def run(self):
@@ -314,7 +290,8 @@ class Trainer:
             eval_loss = self._evaluate(epoch)
 
             end_time = time.time()
-            print("Epoch {}, time {:.2f}".format(epoch + 1, end_time - start_time))
+            print("Epoch {}, time {:.2f}".format(
+                epoch + 1, end_time - start_time))
 
             # Save checkpoint if the current eval_loss is the lowest.
             if not eval_loss_min:
@@ -328,8 +305,8 @@ class Trainer:
 
 def main():
     b_restore = False
-    config = Config(conf='./config/aortath_landmarks.yaml')
-    trainer = Trainer(config, b_restore)
+    config = Config(conf='./config/aortath.yaml')
+    trainer = SegmentationTrainer(config, b_restore)
     trainer.run()
 
 

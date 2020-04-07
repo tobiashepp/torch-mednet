@@ -1,0 +1,39 @@
+# Path to hdf5 data file.
+path_h5data: '/mnt/share/raheppt1/data/aortath/interim/hdf5/data.h5'
+h5_image_group: 'images_norm'
+h5_heatmap_group: 'heatmaps'
+training_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/test2.dat'
+validation_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/test2.dat'
+
+# Dataloading:
+# Number of patches drawn from each subject per epoch.
+samples_per_subject: 30
+patch_size: [64, 64, 64]
+batch_size: 4
+num_workers: 0
+# Probabilty to sample a patch, which contains at least
+# one point of the corresponding class.
+# the first entry defines the probability to sample a
+# random patch without any constraints.
+# If not defined, random patches are sampled.
+# (must not be normalized!)
+class_probabilities: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
+# Threshold to create class labels from heatmaps (uint8!):
+heatmap_treshold: 70
+
+# Model configuration and path to save checkpoints:
+model_path: '/mnt/share/raheppt1/data/aortath/processed/models'
+model:
+  in_channels: 1
+  out_channels: 6 # including one channel for the background!
+  f_maps: 64
+
+# Tensorboard logging:
+run: aortaMod_regr_low_1
+log_dir: '/mnt/share/raheppt1/data/aortath/processed/logs'
+print_interval: 10
+
+# Training parameters:
+learning_rate: 0.0001
+max_epochs: 300
+

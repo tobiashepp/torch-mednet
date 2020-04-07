@@ -9,7 +9,8 @@ images:
 
 # Define labels.
 labels:
-  - name: aorta
+  - 
+    name: aorta
     list: '/mnt/share/raheppt1/data/aortath/interim/crossval/mra_labels_0.csv'
     prob: 0.3
 

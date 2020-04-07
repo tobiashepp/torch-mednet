@@ -181,7 +181,7 @@ class Config:
 
 def main():
     config = Config(
-        conf='/home/raheppt1/projects/mednet/config/aortath.yaml')
+        conf='/home/raheppt1/projects/mednet/config/aortath_landmarks.yaml')
     res = config.parse_subjects(config.train_dir)
     subjects_list = res['subjects_list']
     print(res['label_distribution'])

@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import torch.nn as nn
+import torch
 
 def get_img_names(sample):
     """
@@ -18,6 +19,42 @@ def get_img_names(sample):
                     img_names.append(key)
     return img_names
 
+def heatmap_plot(inputs, logits, heatmaps):
+    inputs = inputs.cpu().detach().numpy()
+    logits = logits.cpu().detach().numpy()
+    heatmaps = heatmaps.cpu().detach().numpy()
+    fig, ax = plt.subplots(1, 3)
+    ax[0].imshow(np.max(inputs[0], axis=2), cmap='gray')
+    ax[0].axis('off')
+    ax[1].imshow(np.max(np.sum(logits, axis=0), axis=2), cmap='coolwarm', vmin=0, vmax=255)
+    ax[1].axis('off')
+    ax[2].imshow(np.max(np.sum(heatmaps, axis=0), axis=2), cmap='coolwarm', vmin=0, vmax=255)
+    ax[2].axis('off')
+    plt.tight_layout()
+    return fig
+
+
+def class_plot(input, logits, class_target):
+    normalization = nn.Softmax(dim=1)
+    print(logits.size())
+    outputs = normalization(logits)
+    print(outputs.size())
+    out_classes = torch.argmax(outputs, dim=0)
+    print(out_classes.size())
+    input = input.cpu().detach().numpy()
+    out_classes = out_classes.cpu().detach().numpy()
+    class_target = class_target.cpu().detach().numpy()
+    fig, ax = plt.subplots(1, 3)
+    ax[0].imshow(np.max(input, axis=2), cmap='gray')
+    ax[0].axis('off')
+    ax[1].imshow(np.max(out_classes, axis=2), cmap='coolwarm', vmin=0, vmax=10)
+    ax[1].axis('off')
+    ax[2].imshow(np.max(class_target, axis=2), cmap='coolwarm', vmin=0, vmax=10)
+    ax[2].axis('off')
+    plt.tight_layout()
+
+    return fig
+
 
 def matplotlib_imshow(inputs, outputs, labels):
 
@@ -26,7 +63,7 @@ def matplotlib_imshow(inputs, outputs, labels):
     num_plots = inputs.size()[1] + outputs.size()[1]-1 + labels.size()[1]-1
     fig, ax = plt.subplots(1, num_plots)
 
-    def _subplot_slice(n, img, title='', cmap='gray', style='mean', use_min_max=False,
+    def _subplot_slice(n, img, title='', cmap='grey', style='mean', use_min_max=False,
                        vmin=0.0, vmax=1.0):
         img = img.cpu().detach()
         # Select the slice in the middle ox the patch.

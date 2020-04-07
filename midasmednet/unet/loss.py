@@ -102,17 +102,20 @@ class WeightedCrossEntropyLoss(nn.Module):
     """WeightedCrossEntropyLoss (WCE) as described in https://arxiv.org/pdf/1707.03237.pdf
     """
 
-    def __init__(self, weight=None, ignore_index=-1):
+    def __init__(self, weight=None, ignore_index=-1, target_one_hot_encoded=True):
         super(WeightedCrossEntropyLoss, self).__init__()
         self.register_buffer('weight', weight)
         self.ignore_index = ignore_index
+        self.target_one_hot_encoded = target_one_hot_encoded
 
     def forward(self, input, target):
         class_weights = self._class_weights(input)
         if self.weight is not None:
             weight = Variable(self.weight, requires_grad=False)
             class_weights = class_weights * weight
-        target = torch.argmax(target, dim=1)
+        if self.target_one_hot_encoded:
+            target = torch.argmax(target, dim=1)
+        
         return F.cross_entropy(input, target, weight=class_weights, ignore_index=self.ignore_index)
 
     @staticmethod
@@ -227,17 +230,13 @@ class PixelWiseCrossEntropyLoss(nn.Module):
         # average the losses
         return result.mean()
 
+class LandmarkLoss(nn.Module):
 
-if __name__ == "__main__":
-    import numpy as np
-    yt = np.random.random(size=(2, 1, 3, 3, 3))
-    # print(yt)
-    yt = torch.from_numpy(yt)
-    yp = np.zeros(shape=(2, 1, 3, 3, 3))
-    yp = yp + 1
-    yp = torch.from_numpy(yp)
-    # print(yp)
-    print(yp)
-    print(yt)
-    dlb = DiceLoss()
-    print(dlb(yp, yt).item())
+    def __init__(self):
+        super(LandmarkLoss, self).__init__()
+        self.ce_loss = WeightedCrossEntropyLoss(target_one_hot_encoded=False)
+
+    def forward(self, logits, heatmaps):
+        # todo add weights
+        loss_mse = F.mse_loss(logits, heatmaps)
+        return loss_mse
