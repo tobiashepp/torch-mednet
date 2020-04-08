@@ -19,7 +19,7 @@ import midasmednet.unet as unet
 import midasmednet.unet.model
 import midasmednet.unet.loss
 from midasmednet.utils.misc import heatmap_plot, class_plot
-from midasmednet.dataset import LandmarkDataset, SegmentationDataset
+from midasmednet.dataset import LandmarkDataset, SegmentationDataset, GridPatchSampler
 from midasmednet.unet.loss import expand_as_one_hot
 import random
 
@@ -272,3 +272,77 @@ class SegmentationTrainer:
                 self._save_model(epoch + 1, validation_loss)
 
         print('Time:', int(time.time() - start), 'seconds')
+
+# todo documentation
+def test_segmentation(input_data_path,
+                     input_group,
+                     output_data_path,
+                     output_group,
+                     model_path,
+                     subject_keys,
+                     patch_size, 
+                     patch_overlap,
+                     batch_size,
+                     out_channels,
+                     in_channels,
+                     fmaps,
+                     num_workers,
+                     one_hot_encoded=True,
+                     data_reader=midasmednet.dataset.read_zarr):
+
+    logger = logging.getLogger(__name__)
+    # set parameters
+    patch_size = patch_size
+    batch_size = batch_size
+    subject_keys = subject_keys
+    
+    # check cuda device
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    logger.info(f'Using {device}')
+
+    # create model and send it to GPU
+    logger.info(f'unet: inputs {in_channels} outpus {out_channels}')
+    net = unet.model.ResidualUNet3D(in_channels=in_channels,
+                                    out_channels=out_channels,
+                                    final_sigmoid=False,
+                                    f_maps=fmaps)
+
+    # restore checkpoint from file
+    checkpoint = torch.load(model_path)
+    net.load_state_dict(checkpoint['model_state_dict'])
+    finished_epochs = checkpoint['epoch']
+    logger.info(f'Restoring model, epoch: {finished_epochs}')
+    net.to(device)
+
+    # create patch sample
+    if not one_hot_encoded:
+        out_channels = 1
+    patch_dataset = GridPatchSampler(input_data_path,
+                                        subject_keys,
+                                        patch_size, patch_overlap,
+                                        image_group=input_group,
+                                        out_channels=out_channels,
+                                        out_dtype=np.uint8)
+
+    patch_loader = DataLoader(patch_dataset, batch_size=batch_size, num_workers=num_workers)
+
+    net.eval()
+    with torch.no_grad():
+        for patch in patch_loader:
+            print(patch['subject_key'][0], str(int(patch['count'][0])).zfill(6), patch['data'][0].shape)
+            inputs = patch['data']
+            
+            # forward propagation only
+            inputs = inputs.float().to(device)
+            logits = net(inputs)
+            outputs = nn.Softmax(dim=1)(logits)
+
+            # aggregate processed patches
+            patch['data'] = outputs.cpu().numpy().astype(np.uint8)
+            if not one_hot_encoded:
+                patch['data'] = np.expand_dims(np.argmax(patch['data'], axis=1), axis=1)
+            patch_dataset.add_processed_batch(patch)
+    
+    results = patch_dataset.get_assembled_data()
+    return results
+    # todo condense to class label array

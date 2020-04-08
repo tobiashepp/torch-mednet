@@ -403,7 +403,8 @@ class GridPatchSampler(IterableDataset):
                  data_path,
                  subject_keys,
                  patch_size, patch_overlap,
-                 num_channels=1,
+                 out_channels=1,
+                 out_dtype=np.uint8,
                  image_group='images',
                  data_reader=read_zarr,
                  pad_args={'mode': 'symmetric'}):
@@ -421,7 +422,8 @@ class GridPatchSampler(IterableDataset):
             subject_keys (list): subject keys
             patch_size (list/np.array): [H,W,D] patch shape
             patch_overlap (list/np.array): [H,W,D] patch boundary
-            num_channels (int, optional): number of channels for the processed patches. Defaults to 1.
+            out_channels (int, optional): number of channels for the processed patches. Defaults to 1.
+            out_dtype (dtype, optional): data type of processed patches. Defaults to np.uint8.  
             image_group (str, optional): image group tag . Defaults to 'images'.
             data_reader (function, optional): data reader function. Defaults to read_zarr.
             pad_args (dict, optional): additional np.pad parameters. Defaults to {'mode': 'symmetric'}.
@@ -432,7 +434,8 @@ class GridPatchSampler(IterableDataset):
         self.patch_overlap = patch_overlap
         self.image_group = image_group
         self.data_reader = data_reader
-        self.num_channels = num_channels
+        self.out_channels = out_channels
+        self.out_dtype = out_dtype
         self.results = {}
         self.originals = {}
         self.pad_args = pad_args
@@ -464,7 +467,7 @@ class GridPatchSampler(IterableDataset):
                                                                        :new_patch_size[1],
                                                                        :new_patch_size[2]]
 
-    def get_assembled_arrays(self):
+    def get_assembled_data(self):
         """Gets the dictionary with assembled/processed images.
         
         Returns:
@@ -486,8 +489,9 @@ class GridPatchSampler(IterableDataset):
             subject_key = self.subject_keys[subj_idx]
             # allocate zero array the assemble the original array from processed patches
             result_shape = np.array(sample.shape)
-            result_shape[0] = self.num_channels
-            self.results[subject_key] = np.zeros(result_shape)
+            result_shape[0] = self.out_channels
+            self.results[subject_key] = np.zeros(
+                result_shape, dtype=self.out_dtype)
             patch_generator = grid_patch_generator(
                 sample, self.patch_size, self.patch_overlap, **self.pad_args)
             for patch, idx, count in patch_generator:

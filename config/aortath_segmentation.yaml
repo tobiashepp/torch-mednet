@@ -3,8 +3,8 @@ run_name: 'dummy'
 data_path: '/mnt/share/raheppt1/data/aortath/interim/hdf5/data.h5'
 image_group: 'images_norm'
 label_group: 'labels'
-training_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/training.dat'
-validation_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/validation.dat'
+training_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/test2.dat'
+validation_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/test2.dat'
 
 # Dataloading:
 # Number of patches drawn from each subject per epoch.
