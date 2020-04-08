@@ -1,36 +1,32 @@
 # Path to data file.
-run_name: 'test_run'
+run_name: 'dummy'
 data_path: '/mnt/share/raheppt1/data/aortath/interim/hdf5/data.h5'
 image_group: 'images_norm'
-heatmap_group: 'heatmaps'
-training_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/test2.dat'
-validation_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/test2.dat'
+label_group: 'labels'
+training_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/training.dat'
+validation_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/validation.dat'
 
 # Dataloading:
 # Number of patches drawn from each subject per epoch.
-samples_per_subject: 50
+samples_per_subject: 30
 patch_size: [64, 64, 64]
 batch_size: 4
-num_workers: 0
+num_workers: 4
 # Probabilty to sample a patch, which contains at least
 # one point of the corresponding class.
 # the first entry defines the probability to sample a
 # random patch without any constraints.
 # If not defined, random patches are sampled.
 # (must not be normalized!)
-class_probabilities: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
-# Threshold to create class labels from heatmaps (uint8!):
-heatmap_treshold: 70
-heatmap_num_workers: 4
+class_probabilities: [0.4, 0.6]
 
 # Model configuration and path to save checkpoints:
 model_path: '/mnt/share/raheppt1/data/aortath/processed/models'
 in_channels: 1
-out_channels: 6 # including one channel for the background!
+out_channels: 2 # including one channel for the background!
 f_maps: 64
 
 # Tensorboard logging:
-run: aortaMod_regr_low_1
 log_dir: '/mnt/share/raheppt1/data/aortath/processed/logs'
 print_interval: 10
 

@@ -20,9 +20,9 @@ def flatten(tensor):
     return transposed.contiguous().view(C, -1)
 
 
-def compute_per_channel_dice(input, target, epsilon=1e-5, ignore_index=None, weight=None):
+def compute_per_channel_dice(input, target, epsilon=1e-5, 
+                             ignore_index=None, weight=None):
     # assumes that input is a normalized probability
-
     # input and target shapes must match
     assert input.size() == target.size(), "'input' and 'target' must have the same shape"
 
@@ -47,16 +47,38 @@ def compute_per_channel_dice(input, target, epsilon=1e-5, ignore_index=None, wei
     return 2. * intersect / denominator.clamp(min=epsilon)
 
 
-# https://github.com/wolny/pytorch-3dunet/blob/master/unet3d/losses.py
+def expand_as_one_hot(input, C, ignore_index=None):
+    """
+    Converts NxDxHxW label image to NxCxDxHxW, where each label gets converted to its corresponding one-hot vector
+    :param input: 4D input image (NxDxHxW)
+    :param C: number of channels/labels
+    :param ignore_index: ignore index to be kept during the expansion
+    :return: 5D output image (NxCxDxHxW)
+    """
+    assert input.dim() == 4
 
-class CELoss(nn.Module):
-    def __init__(self):
-        super(CELoss, self).__init__()
-        self.ce = nn.CrossEntropyLoss()
+    # expand the input tensor to Nx1xDxHxW before scattering
+    input = input.unsqueeze(1)
+    # create result tensor shape (NxCxDxHxW)
+    shape = list(input.size())
+    shape[1] = C
 
-    def forward(self, inputs, targets):
-        inputs = self.normalization(inputs)
-        return self.ce(inputs, targets[:, 0, ...])
+    if ignore_index is not None:
+        # create ignore_index mask for the result
+        mask = input.expand(shape) == ignore_index
+        # clone the src tensor and zero out ignore_index in the input
+        input = input.clone()
+        input[input == ignore_index] = 0
+        # scatter to get the one-hot tensor
+        result = torch.zeros(shape).to(input.device).scatter_(1, input, 1)
+        # bring back the ignore_index in the result
+        result[mask] = ignore_index
+    else:
+        # scatter to get the one-hot tensor
+        result = torch.zeros(shape).to(input.device).scatter_(1, input, 1)
+
+    return result
+
 
 class DiceLoss(nn.Module):
     """Computes Dice Loss, which just 1 - DiceCoefficient described above.
@@ -89,6 +111,8 @@ class DiceLoss(nn.Module):
         else:
             weight = None
 
+        target = expand_as_one_hot(target, C=input.size()[1])
+
         if self.skip_last_target:
             target = target[:, :-1, ...]
 
@@ -97,6 +121,17 @@ class DiceLoss(nn.Module):
         # Average the Dice score across all channels/classes
         return torch.mean(1. - per_channel_dice)
 
+
+# https://github.com/wolny/pytorch-3dunet/blob/master/unet3d/losses.py
+
+class CELoss(nn.Module):
+    def __init__(self):
+        super(CELoss, self).__init__()
+        self.ce = nn.CrossEntropyLoss()
+
+    def forward(self, inputs, targets):
+        inputs = self.normalization(inputs)
+        return self.ce(inputs, targets[:, 0, ...])
 
 class WeightedCrossEntropyLoss(nn.Module):
     """WeightedCrossEntropyLoss (WCE) as described in https://arxiv.org/pdf/1707.03237.pdf
@@ -157,39 +192,6 @@ class BCELossWrapper:
             masked_target = target * mask
 
         return self.loss_criterion(masked_input, masked_target)
-
-
-def expand_as_one_hot(input, C, ignore_index=None):
-    """
-    Converts NxDxHxW label image to NxCxDxHxW, where each label gets converted to its corresponding one-hot vector
-    :param input: 4D input image (NxDxHxW)
-    :param C: number of channels/labels
-    :param ignore_index: ignore index to be kept during the expansion
-    :return: 5D output image (NxCxDxHxW)
-    """
-    assert input.dim() == 4
-
-    # expand the input tensor to Nx1xDxHxW before scattering
-    input = input.unsqueeze(1)
-    # create result tensor shape (NxCxDxHxW)
-    shape = list(input.size())
-    shape[1] = C
-
-    if ignore_index is not None:
-        # create ignore_index mask for the result
-        mask = input.expand(shape) == ignore_index
-        # clone the src tensor and zero out ignore_index in the input
-        input = input.clone()
-        input[input == ignore_index] = 0
-        # scatter to get the one-hot tensor
-        result = torch.zeros(shape).to(input.device).scatter_(1, input, 1)
-        # bring back the ignore_index in the result
-        result[mask] = ignore_index
-        return result
-    else:
-        # scatter to get the one-hot tensor
-        return torch.zeros(shape).to(input.device).scatter_(1, input, 1)
-
 
 class PixelWiseCrossEntropyLoss(nn.Module):
     def __init__(self, class_weights=None, ignore_index=None):

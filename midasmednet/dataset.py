@@ -8,9 +8,9 @@ import tracemalloc
 from pathlib import Path
 import numpy as np
 from joblib import Parallel, delayed, parallel_backend
-from collections import deque
+from collections import deque, defaultdict
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, IterableDataset
 
 
 def get_labeled_position(label, class_value, label_any=None):
@@ -104,7 +104,7 @@ def one_hot_to_label(data,
     data = np.expand_dims(data, axis=0)
     return data
 
-
+# todo documentation
 def read_nifti(path_data_dir, group_subdir, subj_keys, dtype):
     logger = logging.getLogger(__name__)
     data_dir = Path(path_data_dir)
@@ -116,7 +116,7 @@ def read_nifti(path_data_dir, group_subdir, subj_keys, dtype):
         yield np.concatenate([np.expand_dims(nib.load(f).get_fdata(), axis=0).astype(dtype) 
                               for f in files], axis=0)
 
-
+# todo documentation
 def read_h5(path_h5data, group_key, subj_keys, dtype):
     logger = logging.getLogger(__name__)
     with h5py.File(str(path_h5data), 'r') as hf:
@@ -124,7 +124,7 @@ def read_h5(path_h5data, group_key, subj_keys, dtype):
             logger.debug(f'loading {group_key}/{k}')
             yield hf[f'{group_key}/{k}'][:].astype(dtype)
 
-
+# todo documentation
 def read_zarr(path_zarr, group_key, subj_keys, dtype):
     logger = logging.getLogger(__name__)
     with zarr.open(str(path_zarr), 'r') as zf:
@@ -134,16 +134,32 @@ def read_zarr(path_zarr, group_key, subj_keys, dtype):
 
 
 def read_data_to_memory(data_path, subject_keys, group, data_generator=read_zarr, dtype=np.float16):    
+    """Reads data from source to memory.
+    
+    The dataset should be stored using the following structure:
+    <data_path>/<group>/<key>... 
+    A generator function (data_generator) can be defined to read data respecting this
+    structure (implementations for hdf5/zarr/nifti directory are available).
+
+    Args:
+        data_path (str/Path): path to data source
+        subject_keys (list): identifying keys
+        group (str): data group name
+        data_generator (function, optional): Generator which reads the data (hdf5/zarr/nifti directory). Defaults to read_zarr.
+        dtype (type, optional): store dtype (default np.float16/np.uint8). Defaults to np.float16.
+    
+    Returns:
+        object: collections.deque list containing the dataset
+    """
     logger = logging.getLogger(__name__)
     logger.info('loading data ...')
     # check timing and memory allocation
     t = time.perf_counter()
     tracemalloc.start()
-    data = deque(data_generator(data_path, group, subject_keys, dtype))
+    data = deque(data_generator(str(data_path), group, subject_keys, dtype))
     current, peak = tracemalloc.get_traced_memory()
     logger.debug(f'finished: {time.perf_counter() - t :.3f} s, current memory usage {current / 10**9: .2f}GB, peak memory usage {peak / 10**9:.2f}GB')
     return data
-
 
 class MedDataset(Dataset):
 
@@ -277,7 +293,6 @@ class SegmentationDataset(MedDataset):
                                             for c in range(max_class_value)])
         self.logger.debug(f'finished {time.perf_counter() - t : .3f} s')
 
-
 class LandmarkDataset(MedDataset):
 
     def __init__(self,
@@ -288,7 +303,6 @@ class LandmarkDataset(MedDataset):
                  class_probabilities=None,
                  transform=None,
                  data_reader=read_zarr,
-                 verbose=True,
                  heatmap_treshold=30,
                  heatmap_num_workers=4,
                  image_group='images',
@@ -341,4 +355,150 @@ class LandmarkDataset(MedDataset):
         self.logger.debug(f'finished {time.perf_counter() - t : .3f} s')
 
 
+def grid_patch_generator(img, patch_size, patch_overlap, **kwargs):
+    """Generates grid of overlappeing patches.
 
+    All patches are overlapping (2*patch_overlap) per axis.
+    Cropping the patches by patch_overlap results in cropped 
+    patches which can be assembled to the original image shape.
+    
+    Additional np.pad argument can be passed by **kwargs.
+
+    Args:
+        img (np.array): CxHxWxD 
+        patch_size (list/np.array): patch shape [H,W,D]
+        patch_overlap (list/np.array): overlap (per axis) [H,W,D]
+    
+    Yields:
+        np.array, np.array, int: patch data CxHxWxD, 
+                                 patch position [H,W,D], 
+                                 patch number
+    """
+    dim = 3
+    patch_size = np.array(patch_size)
+    img_size = np.array(img.shape[1:])
+    patch_overlap = np.array(patch_overlap)
+    cropped_patch_size = patch_size - 2*patch_overlap
+    n_patches = np.ceil(img_size/cropped_patch_size).astype(int)
+    overhead = cropped_patch_size - img_size % cropped_patch_size
+    padded_img = np.pad(img, [[0,0],
+                              [patch_overlap[0], patch_overlap[0] + overhead[0]],
+                              [patch_overlap[1], patch_overlap[1] + overhead[1]],
+                              [patch_overlap[2], patch_overlap[2] + overhead[2]]], **kwargs)
+    pos = [np.arange(0, n_patches[k])*cropped_patch_size[k] for k in range(dim)]
+    count = -1
+    for p0 in pos[0]:
+        for p1 in pos[1]:
+            for p2 in pos[2]:
+                idx = np.array([p0, p1, p2])
+                idx_end = idx + patch_size
+                count += 1
+                patch = padded_img[:, idx[0]:idx_end[0], idx[1]:idx_end[1], idx[2]:idx_end[2]]
+                yield patch, idx, count
+
+
+class GridPatchSampler(IterableDataset):
+
+    def __init__(self,
+                 data_path,
+                 subject_keys,
+                 patch_size, patch_overlap,
+                 num_channels=1,
+                 image_group='images',
+                 data_reader=read_zarr,
+                 pad_args={'mode': 'symmetric'}):
+        """GridPatchSampler for patch based inference.
+        
+        Creates IterableDataset of overlapping patches (overlap between neighboring
+        patches: 2*patch_overlapping). 
+        To assemble the original image shape use add_processed_batch(). The 
+        number of channels for the assembled images (corresponding to the 
+        channels of the processed patches) has to be defined by num_channels: 
+        <num_channels>xHxWxD.
+
+        Args:
+            data_path (Path/str): data path (e.g. zarr/hdf5 file)
+            subject_keys (list): subject keys
+            patch_size (list/np.array): [H,W,D] patch shape
+            patch_overlap (list/np.array): [H,W,D] patch boundary
+            num_channels (int, optional): number of channels for the processed patches. Defaults to 1.
+            image_group (str, optional): image group tag . Defaults to 'images'.
+            data_reader (function, optional): data reader function. Defaults to read_zarr.
+            pad_args (dict, optional): additional np.pad parameters. Defaults to {'mode': 'symmetric'}.
+        """
+        self.data_path = str(data_path)
+        self.subject_keys = subject_keys
+        self.patch_size = np.array(patch_size)
+        self.patch_overlap = patch_overlap
+        self.image_group = image_group
+        self.data_reader = data_reader
+        self.num_channels = num_channels
+        self.results = {}
+        self.originals = {}
+        self.pad_args = pad_args
+    
+    def add_processed_batch(self, sample):
+        """Assembles the processed patches to the original array shape.
+        
+        Args:
+            sample (dict): 'subject_key', 'pos', 'data' (C,H,W,D) for each patch  
+        """
+        for i, key in enumerate(sample['subject_key']):
+            # crop patch overlap
+            cropped_patch = np.array(sample['data'][i, :, self.patch_overlap[0]:-self.patch_overlap[1],
+                                                          self.patch_overlap[1]:-self.patch_overlap[1],
+                                                          self.patch_overlap[2]:-self.patch_overlap[2]])
+            # start and end position
+            pos = np.array(sample['pos'][i])
+            pos_end = np.array(pos + np.array(cropped_patch.shape[1:]))
+            # check if end position is outside the original array (due to padding)
+            # -> crop again (overhead)
+            img_size = np.array(self.results[key].shape[1:])
+            crop_pos_end = np.minimum(pos_end, img_size)
+            overhead = np.maximum(pos_end - crop_pos_end, [0, 0, 0])
+            new_patch_size = np.array(cropped_patch.shape[1:]) - overhead
+            # add the patch to the corresponing entry in the result container
+            self.results[key][:, pos[0]:pos_end[0],
+                                 pos[1]:pos_end[1],
+                                 pos[2]:pos_end[2]] = cropped_patch[:, :new_patch_size[0],
+                                                                       :new_patch_size[1],
+                                                                       :new_patch_size[2]]
+
+    def get_assembled_arrays(self):
+        """Gets the dictionary with assembled/processed images.
+        
+        Returns:
+            dict: Dictionary containing the processed and assembled images (key=subject_key)
+        """
+        return self.results
+
+    def grid_patch_sampler(self):
+        """Data reading and patch generation.
+        
+        Yields:
+            dict: patch dictionary (subject_key, position, count and data)
+        """
+        # read image data for each subject in subject_keys
+        data_generator = self.data_reader(
+            self.data_path, self.image_group, self.subject_keys, dtype=np.float16)
+        # create a patch iterator 
+        for subj_idx, sample in enumerate(data_generator):
+            subject_key = self.subject_keys[subj_idx]
+            # allocate zero array the assemble the original array from processed patches
+            result_shape = np.array(sample.shape)
+            result_shape[0] = self.num_channels
+            self.results[subject_key] = np.zeros(result_shape)
+            patch_generator = grid_patch_generator(
+                sample, self.patch_size, self.patch_overlap, **self.pad_args)
+            for patch, idx, count in patch_generator:
+                patch_dict = {'data': patch,
+                              'subject_key': subject_key,
+                              'pos': idx,
+                              'count': count}
+                yield patch_dict
+
+    def __iter__(self):
+        return iter(self.grid_patch_sampler())
+
+    def __len__(self):
+        return 1

@@ -34,22 +34,19 @@ def heatmap_plot(inputs, logits, heatmaps):
     return fig
 
 
-def class_plot(input, logits, class_target):
+def class_plot(inputs, logits, class_target):
     normalization = nn.Softmax(dim=1)
-    print(logits.size())
     outputs = normalization(logits)
-    print(outputs.size())
     out_classes = torch.argmax(outputs, dim=0)
-    print(out_classes.size())
     input = input.cpu().detach().numpy()
     out_classes = out_classes.cpu().detach().numpy()
     class_target = class_target.cpu().detach().numpy()
     fig, ax = plt.subplots(1, 3)
-    ax[0].imshow(np.max(input, axis=2), cmap='gray')
+    ax[0].imshow(np.max(inputs[0,...], axis=2), cmap='gray')
     ax[0].axis('off')
-    ax[1].imshow(np.max(out_classes, axis=2), cmap='coolwarm', vmin=0, vmax=10)
+    ax[1].imshow(np.max(out_classes, axis=2), cmap='coolwarm', vmin=0, vmax=1)
     ax[1].axis('off')
-    ax[2].imshow(np.max(class_target, axis=2), cmap='coolwarm', vmin=0, vmax=10)
+    ax[2].imshow(np.max(class_target, axis=2), cmap='coolwarm', vmin=0, vmax=1)
     ax[2].axis('off')
     plt.tight_layout()
 

@@ -1,11 +1,13 @@
 import datetime
 import time
 import shutil
+import visdom
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from pathlib import Path
-
+import yaml
 import torch
 import torch.nn as nn
 import torch.nn.functional
@@ -13,161 +15,143 @@ from torchvision.transforms import Compose
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from torchio.data.images import Image, ImagesDataset
-from torchio.data.queue import Queue
-from torchio.transforms import (
-    ZNormalization,
-    RandomNoise,
-    RandomFlip,
-    RandomAffine,
-)
-
 import midasmednet.unet as unet
 import midasmednet.unet.model
 import midasmednet.unet.loss
-from midasmednet.utils.misc import matplotlib_imshow
-from midasmednet.utils.sampler import RandomLabelSampler, LabelSampler
-from midasmednet.utils.config import Config
+from midasmednet.utils.misc import heatmap_plot, class_plot
+from midasmednet.dataset import LandmarkDataset, SegmentationDataset
+from midasmednet.unet.loss import expand_as_one_hot
 import random
 
 # global todo list
 # todo reweighted loss
 # todo data augmentation to config file
 
+
 class SegmentationTrainer:
 
     def __init__(self,
-                 config=None,
-                 b_restore=False,
-                 b_shuffle_subjects=False):
+                 run_name,
+                 log_dir,
+                 model_path,
+                 print_interval,
+                 max_epochs,
+                 learning_rate,
+                 data_path,
+                 training_subject_keys,
+                 validation_subject_keys,
+                 image_group,
+                 label_group,
+                 samples_per_subject,
+                 class_probabilities,
+                 patch_size, batch_size,
+                 num_workers,
+                 in_channels,
+                 out_channels,
+                 f_maps,
+                 data_reader=midasmednet.dataset.read_zarr,
+                 b_restore=False):
 
-        if not config:
-            self.config = Config()
-        else:
-            self.config = config
+        # define parameters
+        self.logger = logging.getLogger(__name__)
+        self.run_name = run_name
+        self.log_dir = log_dir
+        self.print_interval = print_interval
+        self.model_path = model_path
+        self.max_epochs = max_epochs
+        self.learning_rate = learning_rate
+        self.data_path = data_path
+        self.training_subject_keys = training_subject_keys
+        self.validation_subject_keys = validation_subject_keys
+        self.image_group = image_group
+        self.label_group = label_group
+        self.samples_per_subject = samples_per_subject
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.f_maps = f_maps
+        self.patch_size = patch_size
+        self.class_probabilities = class_probabilities
+        self.data_reader = data_reader
+        self.transform = None
 
-        self.run_name = self.config.run
+        # create training and validation datasets
+        self.logger.info('copying training data to memory ...')
+        self.training_ds = self._create_dataset(training_subject_keys)
+        self.logger.info('copying validation data to memory ...')
+        self.validation_ds = self._create_dataset(validation_subject_keys)
 
-        # Parse subjects.
-        subjects_parser = self.config.parse_subjects(self.config.train_dir)
-        subjects_list = subjects_parser['subjects_list']
-        if b_shuffle_subjects:
-            random.shuffle(subjects_list)
-        self.label_distribution = subjects_parser['label_distribution']
-        self.img_names = subjects_parser['names']['images']
-        self.label_names = subjects_parser['names']['labels']
+        self.dataloader_training = DataLoader(self.training_ds, shuffle=True,
+                                              batch_size=self.batch_size,
+                                              num_workers=self.num_workers)
+        
+        self.dataloader_validation = DataLoader(self.validation_ds, shuffle=True,
+                                                batch_size=self.batch_size,
+                                                num_workers=self.num_workers)
 
-        # Create training and evaluation datasets, queues.
-        train_dataset, eval_dataset = self._create_datasets(subjects_list,
-                                                            self.config.validation_split)
-        self.train_dataset = train_dataset
-        self.eval_dataset = eval_dataset
-        self._generate_queues()
-
-        # Initialize tensorboard writer.
+        # initialize tensorboard writer
         self.writer = self._init_writer()
 
-        # Check cuda device.
+        # check cuda device
         self.device = torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu")
         print(f'Using {self.device}')
 
-        # Create model and send it to GPU.
-        self.net = midasmednet.unet.model.ResidualUNet3D(in_channels=self.config.model['in_channels'],
-                                                         out_channels=self.config.model['out_channels'],
+        # create model and send it to GPU
+        self.net = midasmednet.unet.model.ResidualUNet3D(in_channels=self.in_channels,
+                                                         out_channels=self.out_channels,
                                                          final_sigmoid=False,
-                                                         f_maps=self.config.model['f_maps'])
+                                                         f_maps=self.f_maps)
         self.net.to(self.device)
 
-        # Initialize optimizer and loss function.
+        # initialize optimizer and loss function
         self.optimizer = torch.optim.Adam(params=self.net.parameters(),
-                                          lr=self.config.learning_rate)
-        if self.config.loss == 'CE':
+                                          lr=self.learning_rate)
+
+        self.loss_criterion = 'DICE'
+        if self.loss_criterion == 'CE':
             self.criterion = midasmednet.unet.loss.WeightedCrossEntropyLoss()
-        elif self.config.loss == 'DICE':
-            self.criterion = midasmednet.unet.loss.DiceLoss(
-                sigmoid_normalization=False)
-     
+        elif self.loss_criterion == 'DICE':
+            self.criterion = midasmednet.unet.loss.DiceLoss(sigmoid_normalization=False)
+
         # Restore from checkpoint?
         self.start_epoch = 0
-        self.eval_loss_min = None
+        self.val_loss_min = None
         if b_restore:
-            self.start_epoch, self.eval_loss_min = self._restore_model()
+            self.start_epoch, self.val_loss_min = self._restore_model()
 
-    @staticmethod
-    def _create_datasets(subjects_list, validation_split):
-
-        # todo add data augmentation to config
-        # Define transforms for data normalization and augmentation.
-        transforms = (
-            ZNormalization(),
-            RandomNoise(std_range=(0, 0.25)),
-            RandomFlip(axes=(0,)),
-            RandomAffine(scales=(0.9, 1.1), degrees=5))
-        transform = Compose(transforms)
-
-        # Define datasets.
-        train_dataset = ImagesDataset(subjects_list[:validation_split],
-                                      transform)
-        eval_dataset = ImagesDataset(subjects_list[validation_split:],
-                                     transform=ZNormalization())
-
-        return train_dataset, eval_dataset
-
-    def _generate_queues(self):
-        """
-        Create queues filled with patches from the train/eval dataset.
-        Define dataloaders for training and evaluation. Parameter configuration
-        can be done with self.config.
-        :return:
-        """
-
-        # Random patch sampling (define the frequency for each label class)
-        class PatchSampler(RandomLabelSampler):
-            label_distribution = self.label_distribution
-
-        train_queue = Queue(
-            self.train_dataset,
-            max_length=self.config.queue['max_length'],
-            samples_per_volume=self.config.queue['samples_per_volume'],
-            patch_size=self.config.patch_size,
-            sampler_class=PatchSampler,
-            num_workers=self.config.queue['num_workers'],
-            shuffle_subjects=self.config.queue['shuffle_subjects'],
-            shuffle_patches=self.config.queue['shuffle_patches']
-        )
-        self.train_loader = DataLoader(
-            train_queue, batch_size=self.config.train_batchsize)
-
-        eval_queue = Queue(
-            self.eval_dataset,
-            max_length=self.config.queue['max_length'],
-            samples_per_volume=self.config.queue['samples_per_volume'],
-            patch_size=self.config.patch_size,
-            sampler_class=PatchSampler,
-            num_workers=self.config.queue['num_workers'],
-            shuffle_subjects=self.config.queue['shuffle_subjects'],
-            shuffle_patches=self.config.queue['shuffle_patches']
-        )
-        self.eval_loader = DataLoader(
-            eval_queue, batch_size=self.config.eval_batchsize)
+    def _create_dataset(self, subject_key_file):
+        # read subject keys from file
+        with open(subject_key_file, 'r') as f:
+            subject_keys = [key.strip() for key in f.readlines()]
+        # define dataset
+        ds = SegmentationDataset(data_path=self.data_path,
+                                 subject_keys=subject_keys,
+                                 samples_per_subject=self.samples_per_subject,
+                                 patch_size=self.patch_size,
+                                 class_probabilities=self.class_probabilities,
+                                 transform=None,
+                                 data_reader=self.data_reader,
+                                 image_group=self.image_group,
+                                 label_group=self.label_group)
+        return ds
 
     def _init_writer(self):
         ts = datetime.datetime.now().timestamp()
         readable = datetime.datetime.fromtimestamp(ts).isoformat()
-        log_dir = Path(self.config.log_dir)
+        log_dir = Path(self.log_dir)
+        log_dir.mkdir(exist_ok=True)
         if self.run_name:
-            log_dir = log_dir.joinpath('log_' + self.run_name)
+            log_dir = log_dir.joinpath('log_' + self.run_name + readable)
         else:
             log_dir = log_dir.joinpath('log_' + readable)
-        shutil.rmtree(log_dir)
-        writer = SummaryWriter(str(log_dir))
+        writer = SummaryWriter(log_dir)
         return writer
 
     def _save_model(self, epoch, loss):
         print('Saving new checkpoint ...')
-        model_path = self.config.model_path
-        model_path = Path(model_path)
+        model_path = Path(self.model_path)
         model_path = model_path.joinpath(self.run_name+'_model.pt')
         torch.save({
             'epoch': epoch,
@@ -178,103 +162,90 @@ class SegmentationTrainer:
 
     def _restore_model(self):
         print('Loading checkpoint ...')
-        model_path = self.config.model_path
-        model_path = Path(model_path)
+        model_path = Path(self.model_path)
         model_path = model_path.joinpath(self.run_name+'_model.pt')
-        checkpoint = torch.load(str(model_path))
+        checkpoint = torch.load(model_path)
         self.net.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint['epoch']
-        eval_loss_min = checkpoint['loss']
-        return start_epoch, eval_loss_min
-
-    def _extract_tensors(self, batch):
-        # Concat inputs and targets along the channel dimensions
-        targets = torch.cat([batch[key]['data']
-                             for key in self.label_names], dim=1)
-        inputs = torch.cat([batch[key]['data']
-                            for key in self.img_names], dim=1)
-
-        # Add background label as first channel.
-        targets_background = torch.max(targets, dim=1, keepdim=True)[0]
-        targets_background = (-1) * (targets_background - 1)
-        targets = torch.cat([targets_background, targets], dim=1)
-
-        return inputs, targets
+        val_loss_min = checkpoint['loss']
+        return start_epoch, val_loss_min
 
     def _train_epoch(self, epoch):
-        print_interval = self.config.print_interval
+        print_interval = self.print_interval
         # Training loop ...
         self.net.train()
         running_loss = 0.0
-        for step, batch in enumerate(self.train_loader):
-            # Load input and targets from batch and send them to GPU.
-            inputs, targets = self._extract_tensors(batch)
-            inputs = inputs.to(self.device)
-            targets = targets.to(self.device)
+        for step, batch in enumerate(self.dataloader_training):
 
-            # Training step.
+            # load input and targets from batch and send them to GPU
+            inputs = batch['data'].float().to(self.device)
+            labels = batch['label'][:, -1, ...].long().to(self.device)
+            # training step
+            # forward pass
             self.optimizer.zero_grad()
             logits = self.net(inputs)
-            loss = self.criterion(logits, targets)
+            # backpropagation
+            loss = self.criterion(logits, labels)
             loss.backward()
             self.optimizer.step()
 
             running_loss += loss.item()
-
             if step % print_interval == (print_interval - 1):
                 print('[%d, %4d] loss: %.3f' %
                       (epoch + 1, step + 1, running_loss / print_interval))
 
-                global_step = epoch * len(self.train_loader) + (step + 1)
+                global_step = epoch * \
+                    len(self.dataloader_training) + (step + 1)
 
-                self.writer.add_scalar('Loss/train',
+                self.writer.add_scalar('Loss/training',
                                        running_loss / print_interval,
                                        global_step=global_step)
 
-                self.writer.add_figure('Sample', matplotlib_imshow(inputs, logits, targets),
+                self.writer.add_figure('Segementation', class_plot(inputs[0], logits[0], labels[0]),
                                        global_step=global_step)
                 running_loss = 0.0
 
-    def _evaluate(self, epoch):
+    def _test(self, epoch):
         running_loss = 0.0
         per_channel_dice = 0.0
         self.net.eval()
         with torch.no_grad():
-            for step, batch in enumerate(tqdm(self.eval_loader)):
-                # Load input and targets from batch.
-                inputs, targets = self._extract_tensors(batch)
-                inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
+            for step, batch in enumerate(tqdm(self.dataloader_validation)):
+                # load input and targets from batch and send them to GPU
+                inputs = batch['data'].float().to(self.device)
+                labels = batch['label'][:, -1, ...].long().to(self.device)
                 # Forward propagation only.
                 logits = self.net(inputs)
                 # Calculate metrics.
-                loss = self.criterion(logits, targets)
+                loss = self.criterion(logits, labels)
                 running_loss += loss.item()
+                # expand as on hot for dice loss
                 outputs = nn.Softmax(dim=1)(logits)
+                labels = expand_as_one_hot(labels, C=outputs.size()[1])
                 per_channel_dice += midasmednet.unet.loss.compute_per_channel_dice(
-                    outputs, targets)
-    
+                                                    outputs, labels)
+
         # Compute mean loss/dice metrics and log to tensorboard.
-        eval_loss = running_loss / len(self.eval_loader)
-        self.writer.add_scalar('Loss/eval',
-                               eval_loss,
+        validation_loss = running_loss / len(self.dataloader_validation)
+        self.writer.add_scalar('Loss/validation',
+                               validation_loss,
                                global_step=epoch + 1)
 
-        per_channel_dice = per_channel_dice/len(self.eval_loader)
+        per_channel_dice = per_channel_dice/len(self.dataloader_validation)
         for k in range(per_channel_dice.size()[0]):
             self.writer.add_scalar(f'Dice/label{k}',
-                                    per_channel_dice[k],
-                                    global_step=epoch+1)
-        return eval_loss
+                                   per_channel_dice[k],
+                                   global_step=epoch+1)
+        return validation_loss
 
     def run(self):
         # Parameters
-        max_epochs = self.config.max_epochs
+        max_epochs = self.max_epochs
 
         # Variables
         start_epoch = self.start_epoch
-        eval_loss_min = self.eval_loss_min
+        val_loss_min = self.val_loss_min
 
         print(f'Training started ...')
         start = time.time()
@@ -286,29 +257,18 @@ class SegmentationTrainer:
             self._train_epoch(epoch)
 
             # Evaluate ...
-            print('Evaluate ...')
-            eval_loss = self._evaluate(epoch)
+            print('Validate ...')
+            validation_loss = self._test(epoch)
 
             end_time = time.time()
             print("Epoch {}, time {:.2f}".format(
                 epoch + 1, end_time - start_time))
 
             # Save checkpoint if the current eval_loss is the lowest.
-            if not eval_loss_min:
-                eval_loss_min = eval_loss
-            if eval_loss < eval_loss_min or epoch == 0:
-                eval_loss_min = eval_loss
-                self._save_model(epoch + 1, eval_loss)
+            if not val_loss_min:
+                val_loss_min = validation_loss
+            if validation_loss < val_loss_min or epoch == 0:
+                val_loss_min = validation_loss
+                self._save_model(epoch + 1, validation_loss)
 
         print('Time:', int(time.time() - start), 'seconds')
-
-
-def main():
-    b_restore = False
-    config = Config(conf='./config/aortath.yaml')
-    trainer = SegmentationTrainer(config, b_restore)
-    trainer.run()
-
-
-if __name__ == "__main__":
-    main()

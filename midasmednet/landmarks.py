@@ -1,6 +1,8 @@
 import datetime
 import time
 import shutil
+import visdom
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -25,32 +27,68 @@ import random
 class LandmarkTrainer:
 
     def __init__(self,
-                 config_path,
-                 b_restore=False,
-                 b_shuffle_subjects=False):
+                 run_name,
+                 log_dir, 
+                 model_path, 
+                 print_interval,
+                 max_epochs,
+                 learning_rate,
+                 data_path,
+                 training_subject_keys, 
+                 validation_subject_keys,
+                 image_group, 
+                 heatmap_group,
+                 samples_per_subject, 
+                 class_probabilities,
+                 patch_size, batch_size, 
+                 num_workers,
+                 in_channels, 
+                 out_channels, 
+                 f_maps,
+                 heatmap_treshold,
+                 heatmap_num_workers = 4,
+                 data_reader = midasmednet.dataset.read_zarr,
+                 b_restore=False):
 
-        with open(config_path) as f:
-            self.config = yaml.load(f, Loader=yaml.FullLoader)
+        # define parameters
+        self.logger = logging.getLogger(__name__)
+        self.run_name = run_name
+        self.log_dir = log_dir
+        self.print_interval = print_interval
+        self.model_path = model_path
+        self.max_epochs = max_epochs
+        self.learning_rate = learning_rate
+        self.data_path = data_path
+        self.training_subject_keys = training_subject_keys
+        self.validation_subject_keys = validation_subject_keys
+        self.image_group = image_group
+        self.heatmap_group = heatmap_group
+        self.samples_per_subject = samples_per_subject
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.f_maps = f_maps
 
-        # define parameters from config dict
-        self.run_name = self.config['run']
-        self.log_dir = self.config['log_dir']
-        self.max_epochs = self.config['max_epochs']
-        self.print_interval = self.config['print_interval']
-        self.model_path = self.config['model_path']
-
+        self.patch_size = patch_size
+        self.class_probabilities = class_probabilities
+        self.heatmap_treshold = heatmap_treshold
+        self.heatmap_num_workers = heatmap_num_workers
+        self.data_reader = data_reader
+        self.transform = None
+        
         # create training and validation datasets
-        training_subject_keys = self.config['training_subject_keys']
-        validation_subject_keys = self.config['validation_subject_keys']
         self.training_ds = self._create_dataset(training_subject_keys)
         self.validation_ds = self._create_dataset(validation_subject_keys)
         
+        self.logger.info('copying training dataset to memory ...')
         self.dataloader_training = DataLoader(self.training_ds, shuffle=True, 
-                                           batch_size=self.config['batch_size'],
-                                           num_workers=self.config['num_workers'])
+                                           batch_size=self.batch_size,
+                                           num_workers=self.num_workers)
+        self.logger.info('copying validation dataset to memory ...')
         self.dataloader_validation = DataLoader(self.validation_ds, shuffle=True,
-                                            batch_size=self.config['batch_size'],
-                                            num_workers=self.config['num_workers'])
+                                            batch_size=self.batch_size,
+                                            num_workers=self.num_workers)
 
         # initialize tensorboard writer
         self.writer = self._init_writer()
@@ -61,15 +99,15 @@ class LandmarkTrainer:
         print(f'Using {self.device}')
 
         # create model and send it to GPU
-        self.net = midasmednet.unet.model.ResidualUNet3D(in_channels=self.config['model']['in_channels'],
-                                                         out_channels=self.config['model']['out_channels'],
+        self.net = midasmednet.unet.model.ResidualUNet3D(in_channels=self.in_channels,
+                                                         out_channels=self.out_channels,
                                                          final_sigmoid=False,
-                                                         f_maps=self.config['model']['f_maps'])
+                                                         f_maps=self.f_maps)
         self.net.to(self.device)
 
         # initialize optimizer and loss function
         self.optimizer = torch.optim.Adam(params=self.net.parameters(),
-                                          lr=self.config['learning_rate'])
+                                          lr=self.learning_rate)
        
         self.criterion = midasmednet.unet.loss.LandmarkLoss()
 
@@ -83,18 +121,18 @@ class LandmarkTrainer:
         # todo add data augmentation
         with open(subject_key_file, 'r') as f:
             subject_keys = [key.strip() for key in f.readlines()]
-        print(subject_keys)
         # define dataset
-        ds = LandmarkDataset(path_h5data=self.config['path_h5data'],
+        ds = LandmarkDataset(data_path=self.data_path,
                              subject_keys=subject_keys,
-                             samples_per_subject=self.config['samples_per_subject'],
-                             patch_size=self.config['patch_size'],
-                             class_probabilities=self.config['class_probabilities'], 
+                             samples_per_subject=self.samples_per_subject,
+                             patch_size=self.patch_size,
+                             class_probabilities=self.class_probabilities, 
                              transform=None, 
-                             verbose=True,
-                             #heatmap_treshold=self.config['heatmap_treshold'],
-                             h5_image_group=self.config['h5_image_group'],
-                             h5_heatmap_group=self.config['h5_heatmap_group'])
+                             data_reader=self.data_reader,
+                             heatmap_treshold=self.heatmap_treshold,
+                             heatmap_num_workers=self.heatmap_num_workers,
+                             image_group=self.image_group,
+                             heatmap_group=self.heatmap_group)
         return ds
 
     def _init_writer(self):
@@ -161,7 +199,7 @@ class LandmarkTrainer:
             loss_mse = sum(mse)
             loss = loss_mse
             loss.backward()
-            self.optimizer.step()
+            self.optimizer.step() 
 
             running_loss += loss.item()
             if step % print_interval == (print_interval - 1):
@@ -256,8 +294,13 @@ class LandmarkTrainer:
 
 
 def main():
+
+    self.run_name = self.config['run']
+     
+
     trainer = LandmarkTrainer(
         '/home/raheppt1/projects/mednet/config/aortath_landmarks.yaml')
+
     trainer.run()
 
 
