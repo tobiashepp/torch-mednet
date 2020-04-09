@@ -36,19 +36,19 @@ class SimpleITKAsNibabelHeader(nibabel.spatialimages.SpatialHeader):
             zooms=image_reference.GetSpacing())
 
 
-    def make_affine(simpleITKImage):
-        # get affine transform in LPS
-        c = [simpleITKImage.TransformContinuousIndexToPhysicalPoint(p)
-            for p in ((1, 0, 0),
-                    (0, 1, 0),
-                    (0, 0, 1),
-                    (0, 0, 0))]
-        c = np.array(c)
-        affine = np.concatenate([
-            np.concatenate([c[0:3] - c[3:], c[3:]], axis=0),
-            [[0.], [0.], [0.], [1.]]
-        ], axis=1)
-        affine = np.transpose(affine)
-        # convert to RAS to match nibabel
-        affine = np.matmul(np.diag([-1., -1., 1., 1.]), affine)
-        return affine
+def make_affine(simpleITKImage):
+    # get affine transform in LPS
+    c = [simpleITKImage.TransformContinuousIndexToPhysicalPoint(p)
+        for p in ((1, 0, 0),
+                (0, 1, 0),
+                (0, 0, 1),
+                (0, 0, 0))]
+    c = np.array(c)
+    affine = np.concatenate([
+        np.concatenate([c[0:3] - c[3:], c[3:]], axis=0),
+        [[0.], [0.], [0.], [1.]]
+    ], axis=1)
+    affine = np.transpose(affine)
+    # convert to RAS to match nibabel
+    affine = np.matmul(np.diag([-1., -1., 1., 1.]), affine)
+    return affine
