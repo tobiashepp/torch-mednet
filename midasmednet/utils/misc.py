@@ -38,7 +38,7 @@ def class_plot(inputs, logits, class_target):
     normalization = nn.Softmax(dim=1)
     outputs = normalization(logits)
     out_classes = torch.argmax(outputs, dim=0)
-    input = input.cpu().detach().numpy()
+    inputs = inputs.cpu().detach().numpy()
     out_classes = out_classes.cpu().detach().numpy()
     class_target = class_target.cpu().detach().numpy()
     fig, ax = plt.subplots(1, 3)

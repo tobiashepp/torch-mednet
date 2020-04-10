@@ -152,7 +152,7 @@ def read_data_to_memory(data_path, subject_keys, group, data_generator=read_zarr
         object: collections.deque list containing the dataset
     """
     logger = logging.getLogger(__name__)
-    logger.info('loading data ...')
+    logger.info(f'loading data {group}...')
     # check timing and memory allocation
     t = time.perf_counter()
     tracemalloc.start()
@@ -180,7 +180,6 @@ class MedDataset(Dataset):
         self.class_probabilities = class_probabilities
 
         self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.DEBUG)
 
         # normalize class probabilities
         if class_probabilities:

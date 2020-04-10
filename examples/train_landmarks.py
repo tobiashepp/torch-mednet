@@ -1,7 +1,10 @@
 from midasmednet.landmarks import LandmarkTrainer
 from sacred import Experiment
+from sacred.observers import MongoObserver
 import midasmednet.dataset
+
 ex = Experiment('landmark_detection')
+ex.observers.append(MongoObserver(db_name='mednet'))
 ex.add_config('/home/raheppt1/projects/mednet/config/aortath_landmarks.yaml')
 
 
@@ -9,7 +12,8 @@ ex.add_config('/home/raheppt1/projects/mednet/config/aortath_landmarks.yaml')
 def landmark_config():
     run_name = 'test_run'
     data_reader = midasmednet.dataset.read_h5
-
+    restore_name = 'test_run1_200409_212019_model.pt'
+                   
 
 @ex.automain
 def main(run_name,
@@ -32,7 +36,9 @@ def main(run_name,
          f_maps,
          heatmap_treshold,
          heatmap_num_workers,
-         data_reader):
+         data_reader,
+         restore_name,
+         _run):
 
     trainer = LandmarkTrainer(run_name,
                               log_dir,
@@ -54,6 +60,8 @@ def main(run_name,
                               f_maps,
                               heatmap_treshold,
                               heatmap_num_workers,
-                              data_reader)
+                              data_reader,
+                              _run=_run,
+                              restore_name=restore_name)
 
     trainer.run()

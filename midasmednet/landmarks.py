@@ -48,12 +48,13 @@ class LandmarkTrainer:
                  heatmap_treshold,
                  heatmap_num_workers = 4,
                  data_reader = midasmednet.dataset.read_zarr,
-                 b_restore=False):
+                 restore_name=None,
+                 _run=None):
 
         # define parameters
         self.logger = logging.getLogger(__name__)
-        self.run_name = run_name
-        self.log_dir = log_dir
+        self._run = _run  # sacred run object
+ 
         self.print_interval = print_interval
         self.model_path = model_path
         self.max_epochs = max_epochs
@@ -69,7 +70,7 @@ class LandmarkTrainer:
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.f_maps = f_maps
-
+        self.restore_name = restore_name
         self.patch_size = patch_size
         self.class_probabilities = class_probabilities
         self.heatmap_treshold = heatmap_treshold
@@ -77,15 +78,27 @@ class LandmarkTrainer:
         self.data_reader = data_reader
         self.transform = None
         
+        # get run id from sacred
+        self.run_id = ''
+        if _run:
+            self.run_id = _run._id
+        # create timestamp
+        ts = datetime.datetime.now().timestamp()
+        readable = datetime.datetime.fromtimestamp(
+            ts).strftime("%y%m%d_%H%M%S")
+        # initialize run name
+        self.run_name = run_name + str(self.run_id) + '_' + readable
+        self.log_dir = Path(log_dir).joinpath('log_' + self.run_name)
+
         # create training and validation datasets
+        self.logger.info('copying training data to memory ...')
         self.training_ds = self._create_dataset(training_subject_keys)
-        self.validation_ds = self._create_dataset(validation_subject_keys)
-        
-        self.logger.info('copying training dataset to memory ...')
+        self.logger.info('copying validation data to memory ...')
+        self.validation_ds = self._create_dataset(validation_subject_keys)   
+      
         self.dataloader_training = DataLoader(self.training_ds, shuffle=True, 
                                            batch_size=self.batch_size,
                                            num_workers=self.num_workers)
-        self.logger.info('copying validation dataset to memory ...')
         self.dataloader_validation = DataLoader(self.validation_ds, shuffle=True,
                                             batch_size=self.batch_size,
                                             num_workers=self.num_workers)
@@ -96,7 +109,7 @@ class LandmarkTrainer:
         # check cuda device
         self.device = torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu")
-        print(f'Using {self.device}')
+        self.logger.info(f'using {self.device}')
 
         # create model and send it to GPU
         self.net = midasmednet.unet.model.ResidualUNet3D(in_channels=self.in_channels,
@@ -114,7 +127,7 @@ class LandmarkTrainer:
         # Restore from checkpoint?
         self.start_epoch = 0
         self.val_loss_min = None
-        if b_restore:
+        if self.restore_name:
             self.start_epoch, self.val_loss_min = self._restore_model()
 
     def _create_dataset(self, subject_key_file):
@@ -136,19 +149,13 @@ class LandmarkTrainer:
         return ds
 
     def _init_writer(self):
-        ts = datetime.datetime.now().timestamp()
-        readable = datetime.datetime.fromtimestamp(ts).isoformat()
         log_dir = Path(self.log_dir)
         log_dir.mkdir(exist_ok=True)
-        if self.run_name:
-            log_dir = log_dir.joinpath('log_' + self.run_name)
-        else:
-            log_dir = log_dir.joinpath('log_' + readable)
         writer = SummaryWriter(log_dir)
         return writer
 
     def _save_model(self, epoch, loss):
-        print('Saving new checkpoint ...')
+        self.logger.info('saving new checkpoint ...')
         model_path = Path(self.model_path)
         model_path = model_path.joinpath(self.run_name+'_model.pt')
         torch.save({
@@ -159,9 +166,9 @@ class LandmarkTrainer:
             str(model_path))
 
     def _restore_model(self):
-        print('Loading checkpoint ...')
+        self.logger.info('loading checkpoint ...')
         model_path = Path(self.model_path)
-        model_path = model_path.joinpath(self.run_name+'_model.pt')
+        model_path = model_path.joinpath(self.restore_name)
         checkpoint = torch.load(model_path)
         self.net.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -203,14 +210,15 @@ class LandmarkTrainer:
 
             running_loss += loss.item()
             if step % print_interval == (print_interval - 1):
-                print('[%d, %4d] loss: %.3f' %
-                      (epoch + 1, step + 1, running_loss / print_interval))
-
-                global_step = epoch * len(self.dataloader_training) + (step + 1)
-
-                self.writer.add_scalar('Loss/training',
-                                       running_loss / print_interval,
+                training_loss = running_loss / print_interval
+                global_step = epoch * \
+                    len(self.dataloader_training) + (step + 1)
+                self.logger.info('[%d, %4d] loss: %.3f' %
+                      (epoch + 1, step + 1, training_loss))
+                # tensorboard/sacred logging
+                self.writer.add_scalar('training/loss', training_loss,
                                        global_step=global_step)
+                self._run.log_scalar('training/loss', training_loss, global_step)
 
                 self.writer.add_figure('Sample', heatmap_plot(inputs[0], logits[0], heatmaps[0]),
                                        global_step=global_step)
@@ -221,7 +229,7 @@ class LandmarkTrainer:
         mse_loss = 0.0
         self.net.eval()
         with torch.no_grad():
-            for step, batch in enumerate(tqdm(self.dataloader_validation)):
+            for step, batch in enumerate(self.dataloader_validation):
                 # load input and targets from batch and send them to GPU
                 inputs =  batch['data'].float()
                 labels = batch['label'][:,-1,...].long()
@@ -243,19 +251,22 @@ class LandmarkTrainer:
                 loss_mse = sum(mse)
                 loss = loss_mse
 
-                running_loss += loss
-                mse_loss += loss_mse
+                running_loss += loss.item()
+                mse_loss += loss_mse.item()
 
-        # Compute mean loss/dice metrics and log to tensorboard.
+        # Compute mean loss and log to tensorboard/sacred.
         validation_loss = running_loss / len(self.dataloader_validation)
-        self.writer.add_scalar('Loss/validation',
+        self.writer.add_scalar('validation/loss',
                                validation_loss,
                                global_step=epoch + 1)
+        self._run.log_scalar('validation/loss', validation_loss, epoch + 1)
 
         mse_loss = mse_loss / len(self.dataloader_validation)
-        self.writer.add_scalar('Loss/valmse',
+        self.writer.add_scalar('validation/mse',
                                mse_loss,
                                global_step=epoch + 1)
+        self._run.log_scalar('validation.mse', mse_loss, epoch + 1)
+
         return validation_loss
 
     def run(self):
@@ -266,21 +277,21 @@ class LandmarkTrainer:
         start_epoch = self.start_epoch
         val_loss_min = self.val_loss_min
 
-        print(f'Training started ...')
+        self.logger.info(f'training started ...')
         start = time.time()
         for epoch in range(start_epoch, max_epochs):
             start_time = time.time()
 
             # Train for one epoch.
-            print('Train ...')
+            self.logger.info('train ...')
             self._train_epoch(epoch)
 
             # Evaluate ...
-            print('Validate ...')
+            self.logger.info('validate ...')
             validation_loss = self._test(epoch)
 
             end_time = time.time()
-            print("Epoch {}, time {:.2f}".format(
+            self.logger.info("epoch {}, time {:.2f}".format(
                 epoch + 1, end_time - start_time))
 
             # Save checkpoint if the current eval_loss is the lowest.
@@ -290,7 +301,7 @@ class LandmarkTrainer:
                 val_loss_min = validation_loss
                 self._save_model(epoch + 1, validation_loss)
 
-        print('Time:', int(time.time() - start), 'seconds')
+        self.logger.info('time:', int(time.time() - start), 'seconds')
 
 
 def main():
