@@ -1,6 +1,6 @@
 # Path to data file.
 run_name: 'aorta_landmarks'
-data_path: '/mnt/share/raheppt1/data/aortath/interim/hdf5/data.h5'
+data_path: '/mnt/share/raheppt1/data/aortath/interim/zarr/training_1_5_mm_LAS_preprocessed.zarr'
 image_group: 'images_norm'
 heatmap_group: 'heatmaps'
 training_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/training.dat'

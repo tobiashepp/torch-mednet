@@ -1,10 +1,10 @@
 # Path to data file.
-run_name: 'dummy'
-data_path: '/mnt/share/raheppt1/data/aortath/interim/hdf5/data.h5'
+run_name: 'aorta_segmentation'
+data_path: '/mnt/share/raheppt1/data/aortath/interim/zarr/training_1_5_mm_LAS_preprocessed.zarr'
 image_group: 'images_norm'
 label_group: 'labels'
-training_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/test2.dat'
-validation_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/test2.dat'
+training_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/training.dat'
+validation_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/validation.dat'
 
 # Dataloading:
 # Number of patches drawn from each subject per epoch.
