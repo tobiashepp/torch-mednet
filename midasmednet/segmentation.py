@@ -168,7 +168,7 @@ class SegmentationTrainer:
             str(model_path))
 
     def _restore_model(self):
-        self.logger.info('loading checkpoint ...')
+        self.logger.info(f'loading checkpoint {self.restore_name} ...')
         model_path = Path(self.model_path)
         model_path = model_path.joinpath(self.restore_name)
         checkpoint = torch.load(model_path)
@@ -208,9 +208,8 @@ class SegmentationTrainer:
                                        running_loss / print_interval,
                                        global_step=global_step)
                 if self._run is not None:
-                    print('log', training_loss, 'step', global_step)
                     self._run.log_scalar(
-                        'training/loss', training_loss, epoch + 1)
+                        'training/loss', training_loss, global_step)
                 self.writer.add_figure('Segmentation', class_plot(inputs[0], logits[0], labels[0]),
                                        global_step=global_step)
                 running_loss = 0.0

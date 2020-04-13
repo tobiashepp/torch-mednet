@@ -166,7 +166,7 @@ class LandmarkTrainer:
             str(model_path))
 
     def _restore_model(self):
-        self.logger.info('loading checkpoint ...')
+        self.logger.info(f'loading checkpoint {self.restore_name} ...')
         model_path = Path(self.model_path)
         model_path = model_path.joinpath(self.restore_name)
         checkpoint = torch.load(model_path)

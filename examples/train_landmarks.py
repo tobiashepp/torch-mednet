@@ -10,9 +10,8 @@ ex.add_config('/home/raheppt1/projects/mednet/config/aortath_landmarks.yaml')
 
 @ex.config
 def landmark_config():
-    run_name = 'test_run'
-    data_reader = midasmednet.dataset.read_h5
-    restore_name = 'test_run1_200409_212019_model.pt'
+    data_reader = midasmednet.dataset.read_zarr
+    restore_name = None
                    
 
 @ex.automain

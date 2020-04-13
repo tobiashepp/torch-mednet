@@ -10,7 +10,7 @@ ex.add_config(
 
 @ex.config
 def segmentation_config():
-    data_reader = midasmednet.dataset.read_h5
+    data_reader = midasmednet.dataset.read_zarr
 
 @ex.capture
 def start_segmentation(run_name,
