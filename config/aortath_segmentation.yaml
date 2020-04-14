@@ -8,8 +8,8 @@ validation_subject_keys: '/mnt/share/raheppt1/data/aortath/interim/crossval/vali
 
 # Dataloading:
 # Number of patches drawn from each subject per epoch.
-samples_per_subject: 30
-patch_size: [64, 64, 64]
+samples_per_subject: 15
+patch_size: [96, 96, 96]
 batch_size: 4
 num_workers: 4
 # Probabilty to sample a patch, which contains at least
@@ -18,7 +18,7 @@ num_workers: 4
 # random patch without any constraints.
 # If not defined, random patches are sampled.
 # (must not be normalized!)
-class_probabilities: [0.4, 0.6]
+class_probabilities: [0.6, 0.4]
 
 # Model configuration and path to save checkpoints:
 model_path: '/mnt/share/raheppt1/data/aortath/processed/models'

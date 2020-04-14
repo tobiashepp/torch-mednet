@@ -89,6 +89,7 @@ class LandmarkTrainer:
         # initialize run name
         self.run_name = run_name + str(self.run_id) + '_' + readable
         self.log_dir = Path(log_dir).joinpath('log_' + self.run_name)
+        self.logger.info(f'model : {self.run_name}_model.pt')
 
         # create training and validation datasets
         self.logger.info('copying training data to memory ...')
