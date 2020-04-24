@@ -1,5 +1,5 @@
 import torch.nn as nn
-
+import pytorch_lightning as pl
 from midasmednet.unet.components import Encoder, Decoder, DoubleConv, ExtResNetBlock, SingleConv
 
 # https://github.com/wolny/pytorch-3dunet/blob/master/unet3d/
@@ -8,7 +8,7 @@ def create_feature_maps(init_channel_number, number_of_fmaps):
     return [init_channel_number * 2 ** k for k in range(number_of_fmaps)]
 
 
-class UNet3D(nn.Module):
+class UNet3D(pl.LightningModule):
     """
     3DUnet unet from
     `"3D U-Net: Learning Dense Volumetric Segmentation from Sparse Annotation"

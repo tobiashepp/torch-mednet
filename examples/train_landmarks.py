@@ -12,7 +12,11 @@ ex.add_config('/home/raheppt1/projects/mednet/config/aortath_landmarks.yaml')
 def landmark_config():
     data_reader = midasmednet.dataset.read_zarr
     restore_name = None
+    lambda_l2 = 0.001
                    
+@ex.capture
+def transform():
+    Rotaiton
 
 @ex.automain
 def main(run_name,

@@ -52,6 +52,7 @@ class SegmentationTrainer:
                  f_maps,
                  data_reader=midasmednet.dataset.read_zarr,
                  restore_name=None,
+                 transform=None,
                  _run=None):
 
         # define parameters
@@ -77,7 +78,7 @@ class SegmentationTrainer:
         self.patch_size = patch_size
         self.class_probabilities = class_probabilities
         self.data_reader = data_reader
-        self.transform = None
+        self.transform = transform
 
         # get run id from sacred
         self.run_id = ''
@@ -93,9 +94,9 @@ class SegmentationTrainer:
 
         # create training and validation datasets
         self.logger.info('copying training data to memory ...')
-        self.training_ds = self._create_dataset(training_subject_keys)
+        self.training_ds = self._create_dataset(training_subject_keys, transform=self.transform)
         self.logger.info('copying validation data to memory ...')
-        self.validation_ds = self._create_dataset(validation_subject_keys)
+        self.validation_ds = self._create_dataset(validation_subject_keys, transform=None)
 
         self.dataloader_training = DataLoader(self.training_ds, shuffle=True,
                                               batch_size=self.batch_size,
@@ -135,7 +136,7 @@ class SegmentationTrainer:
         if self.restore_name:
             self.start_epoch, self.val_loss_min = self._restore_model()
 
-    def _create_dataset(self, subject_key_file):
+    def _create_dataset(self, subject_key_file, transform):
         # read subject keys from file
         with open(subject_key_file, 'r') as f:
             subject_keys = [key.strip() for key in f.readlines()]
@@ -145,7 +146,7 @@ class SegmentationTrainer:
                                  samples_per_subject=self.samples_per_subject,
                                  patch_size=self.patch_size,
                                  class_probabilities=self.class_probabilities,
-                                 transform=None,
+                                 transform=transform,
                                  data_reader=self.data_reader,
                                  image_group=self.image_group,
                                  label_group=self.label_group)
@@ -273,7 +274,7 @@ class SegmentationTrainer:
             validation_loss = self._test(epoch)
 
             end_time = time.time()
-            self.logger.info("epoch {}, time {:.2f}".format(
+            self.logger.info("epoch {}, time {:.2f} s".format(
                 epoch + 1, end_time - start_time))
 
             # Save checkpoint if the current eval_loss is the lowest.
@@ -283,4 +284,4 @@ class SegmentationTrainer:
                 val_loss_min = validation_loss
                 self._save_model(epoch + 1, validation_loss)
 
-        self.logger.info('time:', int(time.time() - start), 'seconds')
+        self.logger.info(f'time: {int(time.time() - start)} seconds')

@@ -3,6 +3,9 @@ from sacred import Experiment
 from sacred.observers import MongoObserver
 import midasmednet.dataset
 
+from batchgenerators.transforms.abstract_transforms import Compose
+from batchgenerators.transforms.color_transforms import BrightnessTransform, GammaTransform, ContrastAugmentationTransform
+
 ex = Experiment('train_segmentation')
 ex.observers.append(MongoObserver(db_name='mednet'))
 ex.add_config(
@@ -11,6 +14,9 @@ ex.add_config(
 @ex.config
 def segmentation_config():
     data_reader = midasmednet.dataset.read_zarr
+    transform = Compose([BrightnessTransform(mu=0.0, sigma=0.3, data_key='data'),
+                         GammaTransform(gamma_range=(0.7, 1.3), data_key='data'),
+                         ContrastAugmentationTransform(contrast_range=(0.3, 1.7), data_key='data')])
 
 @ex.capture
 def start_segmentation(run_name,
@@ -32,6 +38,7 @@ def start_segmentation(run_name,
                         out_channels,
                         f_maps,
                         data_reader,
+                       transform,
                         _run):
 
     trainer = SegmentationTrainer(run_name,
@@ -53,6 +60,7 @@ def start_segmentation(run_name,
                                 out_channels,
                                 f_maps,
                                 data_reader,
+                                  transform=transform,
                                 _run=_run)
     trainer.run()
 

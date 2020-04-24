@@ -243,7 +243,7 @@ class MedDataset(Dataset):
         # additional batch dimension for tranform functions
         # format: B,C,H,W,D
         if self.transform:
-            patch = self.transform(patch)
+            patch = self.transform(**patch)
 
         # remove batch dimension
         patch['data'] = np.squeeze(patch['data'], axis=0) 
