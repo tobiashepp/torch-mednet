@@ -110,7 +110,7 @@ class UNet3D(pl.LightningModule):
         return x
 
 
-class ResidualUNet3D(nn.Module):
+class ResidualUNet3D(pl.LightningModule):
     """
     Residual 3DUnet unet implementation based on https://arxiv.org/pdf/1706.00120.pdf.
     Uses ExtResNetBlock instead of DoubleConv as a basic building block as well as summation joining instead

@@ -32,27 +32,13 @@ import random
 class SegmentationTrainer:
 
     def __init__(self,
-                 run_name,
-                 log_dir,
-                 model_path,
                  print_interval,
-                 max_epochs,
                  learning_rate,
-                 data_path,
-                 training_subject_keys,
-                 validation_subject_keys,
-                 image_group,
-                 label_group,
-                 samples_per_subject,
-                 class_probabilities,
                  patch_size, batch_size,
                  num_workers,
                  in_channels,
                  out_channels,
                  f_maps,
-                 data_reader=midasmednet.dataset.read_zarr,
-                 restore_name=None,
-                 transform=None,
                  _run=None):
 
         # define parameters
@@ -137,19 +123,7 @@ class SegmentationTrainer:
             self.start_epoch, self.val_loss_min = self._restore_model()
 
     def _create_dataset(self, subject_key_file, transform):
-        # read subject keys from file
-        with open(subject_key_file, 'r') as f:
-            subject_keys = [key.strip() for key in f.readlines()]
-        # define dataset
-        ds = SegmentationDataset(data_path=self.data_path,
-                                 subject_keys=subject_keys,
-                                 samples_per_subject=self.samples_per_subject,
-                                 patch_size=self.patch_size,
-                                 class_probabilities=self.class_probabilities,
-                                 transform=transform,
-                                 data_reader=self.data_reader,
-                                 image_group=self.image_group,
-                                 label_group=self.label_group)
+        
         return ds
 
     def _init_writer(self):

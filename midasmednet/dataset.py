@@ -104,7 +104,7 @@ def one_hot_to_label(data,
     data = np.expand_dims(data, axis=0)
     return data
 
-# todo documentation
+
 def read_nifti(path_data_dir, group_subdir, subj_keys, dtype):
     logger = logging.getLogger(__name__)
     data_dir = Path(path_data_dir)
@@ -116,7 +116,6 @@ def read_nifti(path_data_dir, group_subdir, subj_keys, dtype):
         yield np.concatenate([np.expand_dims(nib.load(f).get_fdata(), axis=0).astype(dtype) 
                               for f in files], axis=0)
 
-# todo documentation
 def read_h5(path_h5data, group_key, subj_keys, dtype):
     logger = logging.getLogger(__name__)
     with h5py.File(str(path_h5data), 'r') as hf:
@@ -124,7 +123,6 @@ def read_h5(path_h5data, group_key, subj_keys, dtype):
             logger.debug(f'loading {group_key}/{k}')
             yield hf[f'{group_key}/{k}'][:].astype(dtype)
 
-# todo documentation
 def read_zarr(path_zarr, group_key, subj_keys, dtype):
     logger = logging.getLogger(__name__)
     with zarr.open(str(path_zarr), 'r') as zf:
@@ -148,7 +146,7 @@ def read_data_to_memory(data_path, subject_keys, group, data_generator=read_zarr
         data_generator (function, optional): Generator which reads the data (hdf5/zarr/nifti directory). Defaults to read_zarr.
         dtype (type, optional): store dtype (default np.float16/np.uint8). Defaults to np.float16.
     
-    Returns:
+    Returns
         object: collections.deque list containing the dataset
     """
     logger = logging.getLogger(__name__)
@@ -168,6 +166,9 @@ class MedDataset(Dataset):
                  subject_keys,
                  samples_per_subject,
                  patch_size,
+                 image_group:str ='images',
+                 label_group:str ='labels',
+                 data_reader=read_zarr,
                  class_probabilities=None,
                  transform=None):
      
@@ -186,10 +187,26 @@ class MedDataset(Dataset):
             self.class_probabilities = class_probabilities / \
                 np.sum(class_probabilities)
 
-        # data container
-        self.images = []
-        self.labels = []
+        # load images and labels from data file
+        self.images = read_data_to_memory(data_path, subject_keys, image_group, data_reader, dtype=np.float16)
+        self.labels = read_data_to_memory(data_path, subject_keys, label_group, data_reader, dtype=np.uint8)
+
+        # check if the number of labels and images are the same
+        assert(len(self.images)==len(self.labels))
+
+        # for each label and class value (nested list [idx][class_value]) 
+        # compute if any voxel value along axis=2 is equal to the class value
+        # this improves the computational effiency of the label sampling 
+        # signficantly
+        self.logger.info('pre-computing sampling maps ...')
+        t = time.perf_counter()
         self._label_ax2_any = []
+        if class_probabilities:
+            max_class_value =  len(class_probabilities) 
+            for idx in range(len(self.labels)):
+                self._label_ax2_any.append([np.any(self.labels[idx][-1, ...] == c, axis=2)
+                                            for c in range(max_class_value)])
+        self.logger.debug(f'finished {time.perf_counter() - t : .3f} s')
 
     def __len__(self):
         return len(self.images)*self.samples_per_subject
@@ -250,110 +267,7 @@ class MedDataset(Dataset):
         patch['label'] = np.squeeze(patch['label'], axis=0)
         return patch
 
-
-class SegmentationDataset(MedDataset):
-
-    def __init__(self,
-                 data_path,
-                 subject_keys,
-                 samples_per_subject,
-                 patch_size,
-                 class_probabilities=None,
-                 transform=None,
-                 data_reader=read_zarr,
-                 image_group='images',
-                 label_group='labels'):
-     
-        super().__init__(data_path,
-                         subject_keys,
-                         samples_per_subject,
-                         patch_size,
-                         class_probabilities=class_probabilities,
-                         transform=transform)
-
-        # load images and labels from data file
-        self.images = read_data_to_memory(data_path, subject_keys, image_group, data_reader, dtype=np.float16)
-        self.labels = read_data_to_memory(data_path, subject_keys, label_group, data_reader, dtype=np.uint8)
-
-        # check if the number of labels and images are the same
-        assert(len(self.images)==len(self.labels))
-
-        # for each label and class value (nested list [idx][class_value]) 
-        # compute if any voxel value along axis=2 is equal to the class value
-        # this improves the computational effiency of the label sampling 
-        # signficantly
-        self.logger.info('pre-computing sampling maps ...')
-        t = time.perf_counter()
-        self._label_ax2_any = []
-        if class_probabilities:
-            max_class_value =  len(class_probabilities) 
-            for idx in range(len(self.labels)):
-                self._label_ax2_any.append([np.any(self.labels[idx][-1, ...] == c, axis=2)
-                                            for c in range(max_class_value)])
-        self.logger.debug(f'finished {time.perf_counter() - t : .3f} s')
-
-class LandmarkDataset(MedDataset):
-
-    def __init__(self,
-                 data_path,
-                 subject_keys,
-                 samples_per_subject,
-                 patch_size,
-                 class_probabilities=None,
-                 transform=None,
-                 data_reader=read_zarr,
-                 heatmap_treshold=30,
-                 heatmap_num_workers=4,
-                 image_group='images',
-                 heatmap_group='heatmaps'):
-
-        
-        super().__init__(data_path,
-                         subject_keys,
-                         samples_per_subject,
-                         patch_size,
-                         class_probabilities=class_probabilities,
-                         transform=transform)
-        
-        # set parameters
-        self.heatmap_treshold = heatmap_treshold
-        
-        # load images and heatmaps from data file
-        self.images = read_data_to_memory(data_path, subject_keys, image_group, data_reader, dtype=np.float16)
-        self.labels = read_data_to_memory(data_path, subject_keys, heatmap_group, data_reader, dtype=np.uint8)  
-
-        # threshold heatmap to generate class labels
-        self.logger.debug('generating class labels from heatmaps ...')
-        
-        # combining heatmap and labels to joint array (uint8)
-        # class labels will be stored as last (!) channel
-        # multithreading version (!)
-        def process_heatmap(idx, heatmap):
-            class_label = one_hot_to_label(
-                 heatmap > self.heatmap_treshold, add_background=True)
-            self.labels[idx] = np.concatenate([heatmap, class_label], axis=0)
-
-        t = time.perf_counter()
-        with parallel_backend('threading', n_jobs=heatmap_num_workers):
-            Parallel()(delayed(process_heatmap)(idx, heatmap) 
-                                    for idx, heatmap in enumerate(self.labels))
-        self.logger.debug(f'finished {time.perf_counter() - t : .3f} s')
-
-        # for each label and class value (nested list [idx][class_value]) 
-        # compute if any voxel value along axis=2 is equal to the class value
-        # this improves the computational effiency of the label sampling 
-        # signficantly
-        self.logger.debug('pre-computing sampling maps ...')
-        t = time.perf_counter()
-        self._label_ax2_any = []
-        if class_probabilities:
-            max_class_value =  len(class_probabilities) 
-            for idx in range(len(self.labels)):
-                self._label_ax2_any.append([np.any(self.labels[idx][-1, ...] == c, axis=2)
-                                            for c in range(max_class_value)])
-        self.logger.debug(f'finished {time.perf_counter() - t : .3f} s')
-
-
+    
 def grid_patch_generator(img, patch_size, patch_overlap, **kwargs):
     """Generates grid of overlappeing patches.
 
