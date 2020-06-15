@@ -1,5 +1,6 @@
 import os
 import logging
+from configargparse import ArgumentParser
 from torchvision import transforms
 from torch.utils.data import DataLoader
 import torch
@@ -12,6 +13,7 @@ from midasmednet.unet.model import ResidualUNet3D
 from midasmednet.unet.loss import DiceLoss, WeightedCrossEntropyLoss, dice_metric
 from midasmednet.unet.loss import expand_as_one_hot
 
+# TODO neptune
 class SegmentationTrainer(ResidualUNet3D):
 
     def __init__(self,
@@ -21,14 +23,13 @@ class SegmentationTrainer(ResidualUNet3D):
                  num_workers,
                  in_channels,
                  out_channels,
-                 f_maps,
                  loss_criterion,
-                 learning_rate,
-                 hparams=None):
+                 learning_rate=0.001,
+                 fmaps=64):
 
         # create model
         super(SegmentationTrainer, self).__init__(in_channels, out_channels,
-                                                 final_sigmoid=False, f_maps=f_maps)
+                                                 final_sigmoid=False, f_maps=fmaps)
         # copy over
         self.training_dataset = training_dataset
         self.validation_dataset = validation_dataset
@@ -45,6 +46,7 @@ class SegmentationTrainer(ResidualUNet3D):
     def training_step(self, batch, batch_nb):
         inputs = batch['data'].float()
         labels = batch['label'][:, -1, ...].long()
+        # output of the network is assumed to be un-normalized
         outputs = self(inputs)
         loss = self.loss_criterion(outputs, labels)
         return {'loss': loss}
@@ -52,6 +54,7 @@ class SegmentationTrainer(ResidualUNet3D):
     def validation_step(self, batch, batch_nb):
         inputs = batch['data'].float()
         labels = batch['label'][:, -1, ...].long()
+        # output of the network is assumed to be un-normalized
         outputs = self(inputs)
         # metrics
         loss = self.loss_criterion(outputs, labels)
@@ -84,4 +87,15 @@ class SegmentationTrainer(ResidualUNet3D):
         return DataLoader(self.validation_dataset, 
                         batch_size=self.batch_size, 
                         num_workers=self.num_workers,
-                        shuffle=True)
+                        shuffle=False)
+    
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument("--learning_rate", type=float, default=0.001)
+        parser.add_argument("--fmaps", type=int, default=64)
+        parser.add_argument("--batch_size", type=int, default=4)
+        parser.add_argument("--num_workers", type=int, default=4)
+        parser.add_argument("--in_channels", type=int, default=1)
+        parser.add_argument("--out_channels", type=int, default=1)
+        return parser

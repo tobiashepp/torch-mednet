@@ -83,6 +83,9 @@ def get_random_patch_indices(patch_size, img_shape, pos=None):
     index_ini = np.random.randint(low=min_index, high=max_index)
     index_fin = index_ini + patch_size
 
+    box =  (slice(index_ini[0], index_fin[0]),
+            slice(index_ini[1], index_fin[1]),
+            slice(index_ini[1], index_fin[1]))
     return index_ini, index_fin
 
 
@@ -105,23 +108,13 @@ def one_hot_to_label(data,
     return data
 
 
-def read_nifti(path_data_dir, group_subdir, subj_keys, dtype):
-    logger = logging.getLogger(__name__)
-    data_dir = Path(path_data_dir)
-    data_dir = data_dir.joinpath(group_subdir)
-    for k in subj_keys:
-        logger.debug(f'loading {group_subdir}/{k}')
-        files = list(data_dir.glob(f'**/*{k}*nii*'))
-        files.sort()
-        yield np.concatenate([np.expand_dims(nib.load(f).get_fdata(), axis=0).astype(dtype) 
-                              for f in files], axis=0)
-
 def read_h5(path_h5data, group_key, subj_keys, dtype):
     logger = logging.getLogger(__name__)
     with h5py.File(str(path_h5data), 'r') as hf:
         for k in subj_keys:
             logger.debug(f'loading {group_key}/{k}')
             yield hf[f'{group_key}/{k}'][:].astype(dtype)
+
 
 def read_zarr(path_zarr, group_key, subj_keys, dtype):
     logger = logging.getLogger(__name__)
@@ -166,11 +159,29 @@ class MedDataset(Dataset):
                  subject_keys,
                  samples_per_subject,
                  patch_size,
-                 image_group:str ='images',
-                 label_group:str ='labels',
+                 image_group ='images',
+                 label_group ='labels',
+                 heatmap_group='heatmaps',
                  data_reader=read_zarr,
                  class_probabilities=None,
+                 preload=True,
                  transform=None):
+        """Creates patched Dataset object.
+
+        Args:
+            data_path (str): Path to hdf5/zarr data file.
+            subject_keys (list): List of selected subjects keys.
+            samples_per_subject (int): Number of patches per subject.
+            patch_size (int, int, int): Shape of the patches.
+            image_group (str, optional): Group name, image data. Defaults to 'images'.
+            label_group (str, optional): Group name, label data. Defaults to 'labels'.
+            heatmap_group (str, optional): Group name, heatmap data. Default to 'heatmaps'.
+            data_reader (function, optional): Data loading function. Defaults to read_zarr.
+            class_probabilities (list, optional): Probality per class, that a patch contains at least
+                                                  one voxel of this class. Defaults to None.
+            preload (bool, optional): Preload data to memory. Defaults to True.
+            transform (object, optional): (Patchwise) transformation. Defaults to None.
+        """
      
         # set member variables
         self.data_path = data_path
@@ -222,7 +233,7 @@ class MedDataset(Dataset):
         # if a class probabilty list is defined, choose a random
         # class value and sample a position inside this label class
         pos = None
-        selected_class = None
+        selected_class = 0
         if self.class_probabilities is not None:
             # select a class to compute a patch position for
             selected_class = np.random.choice(range(len(self.class_probabilities)),
@@ -419,3 +430,18 @@ class GridPatchSampler(IterableDataset):
 
     def __len__(self):
         return 1
+
+
+def test_MedDataset():
+    train_ds = MedDataset('/mnt/qdata/raheppt1/data/vessel/interim/mra_train.h5',
+                    ['100000'],
+                    1,
+                    [96, 96, 96],
+                    image_group ='images',
+                    label_group ='labels',
+                    heatmap_group='heatmaps',
+                    data_reader=read_h5)
+
+
+
+test_MedDataset()
