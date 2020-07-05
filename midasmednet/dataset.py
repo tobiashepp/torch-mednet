@@ -5,11 +5,13 @@ import h5py
 import zarr
 import nibabel as nib
 import tracemalloc
+from tqdm import tqdm
 from pathlib import Path
 import numpy as np
 from joblib import Parallel, delayed, parallel_backend
 from collections import deque, defaultdict
 import torch
+import zarr
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 
 
@@ -83,9 +85,6 @@ def get_random_patch_indices(patch_size, img_shape, pos=None):
     index_ini = np.random.randint(low=min_index, high=max_index)
     index_fin = index_ini + patch_size
 
-    box =  (slice(index_ini[0], index_fin[0]),
-            slice(index_ini[1], index_fin[1]),
-            slice(index_ini[1], index_fin[1]))
     return index_ini, index_fin
 
 
@@ -107,50 +106,106 @@ def one_hot_to_label(data,
     data = np.expand_dims(data, axis=0)
     return data
 
+class DataReader:
 
-def read_h5(path_h5data, group_key, subj_keys, dtype):
-    logger = logging.getLogger(__name__)
-    with h5py.File(str(path_h5data), 'r') as hf:
-        for k in subj_keys:
-            logger.debug(f'loading {group_key}/{k}')
-            yield hf[f'{group_key}/{k}'][:].astype(dtype)
-
-
-def read_zarr(path_zarr, group_key, subj_keys, dtype):
-    logger = logging.getLogger(__name__)
-    with zarr.open(str(path_zarr), 'r') as zf:
-        for k in subj_keys:
-            logger.debug(f'loading {group_key}/{k}')
-            yield zf[f'{group_key}/{k}'][:].astype(dtype)
-
-
-def read_data_to_memory(data_path, subject_keys, group, data_generator=read_zarr, dtype=np.float16):    
-    """Reads data from source to memory.
+    def read(self, group_key, subj_keys, dtype=True, preload=True):
+        pass
     
-    The dataset should be stored using the following structure:
-    <data_path>/<group>/<key>... 
-    A generator function (data_generator) can be defined to read data respecting this
-    structure (implementations for hdf5/zarr/nifti directory are available).
+    def read_data_to_memory(self, subject_keys, group, dtype=np.float16, preload=True):    
+        """Reads data from source to memory.
+        
+        The dataset should be stored using the following structure:
+        <data_path>/<group>/<key>... 
+        A generator function (data_generator) can be defined to read data respecting this
+        structure (implementations for hdf5/zarr/nifti directory are available).
 
-    Args:
-        data_path (str/Path): path to data source
-        subject_keys (list): identifying keys
-        group (str): data group name
-        data_generator (function, optional): Generator which reads the data (hdf5/zarr/nifti directory). Defaults to read_zarr.
-        dtype (type, optional): store dtype (default np.float16/np.uint8). Defaults to np.float16.
+        Args:
+            subject_keys (list): identifying keys
+            group (str): data group name
+            dtype (type, optional): store dtype (default np.float16/np.uint8). Defaults to np.float16.
+            preload (bool, optional): if False, data will be loaded on the fly. Defaults to True.
+        
+        Returns
+            object: collections.deque list containing the dataset
+        """
+        logger = logging.getLogger(__name__)
+        logger.info(f'loading group [{group}]...')
+        # check timing and memory allocation
+        t = time.perf_counter()
+        tracemalloc.start()
+        data = deque(self.read(subject_keys, group, dtype, preload))
+        current, peak = tracemalloc.get_traced_memory()
+        logger.debug(f'finished: {time.perf_counter() - t :.3f} s, current memory usage {current / 10**9: .2f}GB, peak memory usage {peak / 10**9:.2f}GB')
+        return data
     
-    Returns
-        object: collections.deque list containing the dataset
-    """
-    logger = logging.getLogger(__name__)
-    logger.info(f'loading data {group}...')
-    # check timing and memory allocation
-    t = time.perf_counter()
-    tracemalloc.start()
-    data = deque(data_generator(str(data_path), group, subject_keys, dtype))
-    current, peak = tracemalloc.get_traced_memory()
-    logger.debug(f'finished: {time.perf_counter() - t :.3f} s, current memory usage {current / 10**9: .2f}GB, peak memory usage {peak / 10**9:.2f}GB')
-    return data
+    def get_data_shape(self, subject_keys, group):
+        pass
+
+    def get_data_attribute(self, subject_keys, group, attribute):
+        pass
+
+    def close(self):
+        pass
+
+class DataReaderHDF5(DataReader):
+
+    def __init__(self, path_data):
+        self.path_data = path_data
+        self.hf = h5py.File(str(path_data), 'r')
+        self.logger = logging.getLogger(__name__)
+
+    def read(self, subject_keys, group, dtype=np.float16, preload=True):
+        for k in tqdm(subject_keys):
+            data = self.hf[f'{group}/{k}']
+            if preload:
+                data = data[:].astype(dtype)
+            yield data
+
+    def get_data_shape(self, subject_keys, group):
+        shapes = {}
+        for k in subject_keys:
+            shapes[k] = self.hf[f'{group}/{k}'].shape
+        return shapes
+
+    def get_data_attribute(self, subject_keys, group, attribute):
+        attr = {}
+        for k in subject_keys:
+            attr[k] = self.hf[f'{group}/{k}'].attrs[attribute]
+        return attr
+
+    def close(self):
+        self.hf.close()
+
+class DataReaderZarr(DataReader):
+    
+    def __init__(self, path_data):
+        self.path_data = path_data
+        self.zf = zarr.open(str(path_data), 'r')
+        self.logger = logging.getLogger(__name__)
+
+    def read(self, subject_keys, group, dtype=np.float16, preload=True):
+        self.logger.debug(f'preloading to memory: {preload} ...')
+        for k in tqdm(subj_keys):
+            data = self.zf[f'{group_key}/{k}']
+            if preload:
+                data = data[:].astype(dtype)
+            yield data
+
+    def get_data_shape(self, subject_keys, group):
+        shapes = {}
+        for k in subject_keys:
+            shapes[k] = self.zf[f'{group}/{k}'].shape
+        return shapes
+
+    def get_data_attribute(self, subject_keys, group, attribute):
+        attr = {}
+        for k in subject_keys:
+            attr[k] = self.hf[f'{group}/{k}'].attrs[attribute]
+        return attr
+
+    def close(self):
+        self.zf.close()
+
 
 class MedDataset(Dataset):
 
@@ -161,8 +216,8 @@ class MedDataset(Dataset):
                  patch_size,
                  image_group ='images',
                  label_group ='labels',
-                 heatmap_group='heatmaps',
-                 data_reader=read_zarr,
+                 heatmap_group=None,
+                 ReaderClass=DataReaderHDF5,
                  class_probabilities=None,
                  preload=True,
                  transform=None):
@@ -175,8 +230,8 @@ class MedDataset(Dataset):
             patch_size (int, int, int): Shape of the patches.
             image_group (str, optional): Group name, image data. Defaults to 'images'.
             label_group (str, optional): Group name, label data. Defaults to 'labels'.
-            heatmap_group (str, optional): Group name, heatmap data. Default to 'heatmaps'.
-            data_reader (function, optional): Data loading function. Defaults to read_zarr.
+            heatmap_group (str, optional): Group name, heatmap data. Default to None.
+            ReaderClass (DataReader, optional): Data loading class. Defaults to DataReaderHDF5.
             class_probabilities (list, optional): Probality per class, that a patch contains at least
                                                   one voxel of this class. Defaults to None.
             preload (bool, optional): Preload data to memory. Defaults to True.
@@ -190,7 +245,7 @@ class MedDataset(Dataset):
         self.samples_per_subject = samples_per_subject
         self.patch_size = np.array(patch_size, dtype=np.int)
         self.class_probabilities = class_probabilities
-
+        self.heatmap_group = heatmap_group
         self.logger = logging.getLogger(__name__)
 
         # normalize class probabilities
@@ -198,9 +253,14 @@ class MedDataset(Dataset):
             self.class_probabilities = class_probabilities / \
                 np.sum(class_probabilities)
 
+        # TODO channel selection
         # load images and labels from data file
-        self.images = read_data_to_memory(data_path, subject_keys, image_group, data_reader, dtype=np.float16)
-        self.labels = read_data_to_memory(data_path, subject_keys, label_group, data_reader, dtype=np.uint8)
+        reader = ReaderClass(data_path)
+        self.images = reader.read_data_to_memory(subject_keys, image_group, dtype=np.float16, preload=preload)
+        self.labels = reader.read_data_to_memory(subject_keys, label_group, dtype=np.uint8, preload=preload)
+        if self.heatmap_group:
+            self.heatmaps = reader.read_data_to_memory(subject_keys, heatmap_group, dtype=np.uint8, preload=preload)
+        reader.close()
 
         # check if the number of labels and images are the same
         assert(len(self.images)==len(self.labels))
@@ -229,6 +289,8 @@ class MedDataset(Dataset):
         # load data from container
         imgs = self.images[idx]
         lbls = self.labels[idx]
+        if self.heatmap_group:
+            hmaps = self.heatmaps[idx]
 
         # if a class probabilty list is defined, choose a random
         # class value and sample a position inside this label class
@@ -246,27 +308,32 @@ class MedDataset(Dataset):
                                            label_any=self._label_ax2_any[idx][selected_class])
 
         # get valid indices of a random patch containing the specified position
-        index_ini, index_fin = get_random_patch_indices(self.patch_size,
-                                                        imgs.shape[1:],
-                                                        pos=pos)
+        index_ini, index_fin = get_random_patch_indices(self.patch_size, imgs.shape[1:],pos=pos)
 
         # crop labels and images
-        cropped_imgs = imgs[np.newaxis, :,
-                            index_ini[0]:index_fin[0],
-                            index_ini[1]:index_fin[1],
-                            index_ini[2]:index_fin[2]].astype(np.float32)
+        cropped_imgs = imgs[:, index_ini[0]:index_fin[0],
+                               index_ini[1]:index_fin[1],
+                               index_ini[2]:index_fin[2]].astype(np.float32)
 
-        cropped_lbls = lbls[np.newaxis, :,
-                             index_ini[0]:index_fin[0],
-                             index_ini[1]:index_fin[1],
-                             index_ini[2]:index_fin[2]].astype(np.uint8)
+        cropped_lbls = lbls[:, index_ini[0]:index_fin[0],
+                               index_ini[1]:index_fin[1],
+                               index_ini[2]:index_fin[2]].astype(np.uint8)
 
+        # if heatmap_group is specified, crop and append heatmaps
+        # the class value encoded label map stays always the last channel
+        if self.heatmap_group:
+            cropped_hmaps = hmaps[:, index_ini[0]:index_fin[0],
+                                     index_ini[1]:index_fin[1],
+                                     index_ini[2]:index_fin[2]].astype(np.uint8)
+
+            cropped_lbls = np.concatenate([cropped_hmaps,
+                                        cropped_lbls], axis=0)
 
         patch = {'subject_key': self.subject_keys[idx],
                  'patch_position': index_ini,
                  'selected_class': selected_class,
-                 'data': cropped_imgs,
-                 'label': cropped_lbls}
+                 'data': cropped_imgs[np.newaxis, ...],
+                 'label': cropped_lbls[np.newaxis, ...]}
 
         # additional batch dimension for tranform functions
         # format: B,C,H,W,D
@@ -280,13 +347,14 @@ class MedDataset(Dataset):
 
     
 def grid_patch_generator(img, patch_size, patch_overlap, **kwargs):
-    """Generates grid of overlappeing patches.
+    """Generates grid of overlapping patches.
 
-    All patches are overlapping (2*patch_overlap) per axis.
-    Cropping the patches by patch_overlap results in cropped 
-    patches which can be assembled to the original image shape.
+    All patches are overlapping (2*patch_overlap per axis).
+    Cropping the original image by patch_overlap.
+    The resulting patches can be re-assembled to the 
+    original image shape.
     
-    Additional np.pad argument can be passed by **kwargs.
+    Additional np.pad argument can be passed via **kwargs.
 
     Args:
         img (np.array): CxHxWxD 
@@ -320,7 +388,6 @@ def grid_patch_generator(img, patch_size, patch_overlap, **kwargs):
                 patch = padded_img[:, idx[0]:idx_end[0], idx[1]:idx_end[1], idx[2]:idx_end[2]]
                 yield patch, idx, count
 
-
 class GridPatchSampler(IterableDataset):
 
     def __init__(self,
@@ -329,8 +396,9 @@ class GridPatchSampler(IterableDataset):
                  patch_size, patch_overlap,
                  out_channels=1,
                  out_dtype=np.uint8,
+                 channel_selection=None,
                  image_group='images',
-                 data_reader=read_zarr,
+                 ReaderClass=DataReaderHDF5,
                  pad_args={'mode': 'symmetric'}):
         """GridPatchSampler for patch based inference.
         
@@ -348,8 +416,9 @@ class GridPatchSampler(IterableDataset):
             patch_overlap (list/np.array): [H,W,D] patch boundary
             out_channels (int, optional): number of channels for the processed patches. Defaults to 1.
             out_dtype (dtype, optional): data type of processed patches. Defaults to np.uint8.  
+            channel_selection (dtype, optional): use only specified channels. Defaults to None.
             image_group (str, optional): image group tag . Defaults to 'images'.
-            data_reader (function, optional): data reader function. Defaults to read_zarr.
+            ReaderClass (function, optional): data reader class. Defaults to DataReaderHDF5.
             pad_args (dict, optional): additional np.pad parameters. Defaults to {'mode': 'symmetric'}.
         """
         self.data_path = str(data_path)
@@ -357,12 +426,20 @@ class GridPatchSampler(IterableDataset):
         self.patch_size = np.array(patch_size)
         self.patch_overlap = patch_overlap
         self.image_group = image_group
-        self.data_reader = data_reader
+        self.ReaderClass = ReaderClass
         self.out_channels = out_channels
+        self.channel_selection = channel_selection
         self.out_dtype = out_dtype
-        self.results = {}
+        self.results = zarr.group()
         self.originals = {}
         self.pad_args = pad_args
+
+        # read image data for each subject in subject_keys
+        reader = self.ReaderClass(self.data_path)
+        self.data_shape = reader.get_data_shape(self.subject_keys, self.image_group)
+        self.data_affine = reader.get_data_attribute(self.subject_keys, self.image_group, "affine")
+        self.data_generator = reader.read_data_to_memory(self.subject_keys, self.image_group, dtype=np.float16)
+        reader.close()
     
     def add_processed_batch(self, sample):
         """Assembles the processed patches to the original array shape.
@@ -372,24 +449,29 @@ class GridPatchSampler(IterableDataset):
         """
         for i, key in enumerate(sample['subject_key']):
             # crop patch overlap
-            cropped_patch = np.array(sample['data'][i, :, self.patch_overlap[0]:-self.patch_overlap[1],
-                                                          self.patch_overlap[1]:-self.patch_overlap[1],
-                                                          self.patch_overlap[2]:-self.patch_overlap[2]])
+            cropped_patch = np.array(sample['data'][i, :,
+                                                    self.patch_overlap[0]:-self.patch_overlap[1],
+                                                    self.patch_overlap[1]:-self.patch_overlap[1],
+                                                    self.patch_overlap[2]:-self.patch_overlap[2]])
             # start and end position
             pos = np.array(sample['pos'][i])
             pos_end = np.array(pos + np.array(cropped_patch.shape[1:]))
             # check if end position is outside the original array (due to padding)
             # -> crop again (overhead)
-            img_size = np.array(self.results[key].shape[1:])
+            img_size = np.array(self.data_shape[key][1:])
             crop_pos_end = np.minimum(pos_end, img_size)
             overhead = np.maximum(pos_end - crop_pos_end, [0, 0, 0])
             new_patch_size = np.array(cropped_patch.shape[1:]) - overhead
             # add the patch to the corresponing entry in the result container
-            self.results[key][:, pos[0]:pos_end[0],
-                                 pos[1]:pos_end[1],
-                                 pos[2]:pos_end[2]] = cropped_patch[:, :new_patch_size[0],
-                                                                       :new_patch_size[1],
-                                                                       :new_patch_size[2]]
+            ds_shape = np.array(self.data_shape[key])
+            ds_shape[0] = self.out_channels
+            ds = self.results.require_dataset(key, ds_shape, self.out_dtype)
+            ds.attrs["affine"] = np.array(self.data_affine[key]).tolist()
+            ds[:, pos[0]:pos_end[0],
+                  pos[1]:pos_end[1],
+                  pos[2]:pos_end[2]] = cropped_patch[:, :new_patch_size[0],
+                                                        :new_patch_size[1],
+                                                        :new_patch_size[2]].astype(self.out_dtype)
 
     def get_assembled_data(self):
         """Gets the dictionary with assembled/processed images.
@@ -405,21 +487,17 @@ class GridPatchSampler(IterableDataset):
         Yields:
             dict: patch dictionary (subject_key, position, count and data)
         """
-        # read image data for each subject in subject_keys
-        data_generator = self.data_reader(
-            self.data_path, self.image_group, self.subject_keys, dtype=np.float16)
+        
         # create a patch iterator 
-        for subj_idx, sample in enumerate(data_generator):
+        for subj_idx, sample in enumerate(tqdm(self.data_generator)):
             subject_key = self.subject_keys[subj_idx]
-            # allocate zero array the assemble the original array from processed patches
+            # create patches
             result_shape = np.array(sample.shape)
             result_shape[0] = self.out_channels
-            self.results[subject_key] = np.zeros(
-                result_shape, dtype=self.out_dtype)
             patch_generator = grid_patch_generator(
                 sample, self.patch_size, self.patch_overlap, **self.pad_args)
             for patch, idx, count in patch_generator:
-                patch_dict = {'data': patch,
+                patch_dict = {'data': patch[self.channel_selection, :, :, :],
                               'subject_key': subject_key,
                               'pos': idx,
                               'count': count}
@@ -434,14 +512,57 @@ class GridPatchSampler(IterableDataset):
 
 def test_MedDataset():
     train_ds = MedDataset('/mnt/qdata/raheppt1/data/vessel/interim/mra_train.h5',
-                    ['100000'],
+                    200*['100000'],
                     1,
                     [96, 96, 96],
                     image_group ='images',
                     label_group ='labels',
-                    heatmap_group='heatmaps',
-                    data_reader=read_h5)
+                    #heatmap_group='heatmaps',
+                    ReaderClass=DataReaderHDF5,
+                    preload=True)
+    sample = train_ds[0]["data"]
+
+# TODO pytest
+# TODO test zarr
+import time
+def test_GridPatchSampler():
+    data_path = '/mnt/qdata/raheppt1/data/vessel/interim/mra_train.h5'
+    subject_keys = 10*['100000']
+    patch_size = [96, 96, 96]
+    patch_overlap = [32, 32, 32]
+    batch_size = 32
+    num_workers = 0
+
+    patch_dataset = GridPatchSampler(
+                    data_path,
+                    subject_keys,
+                    patch_size,
+                    patch_overlap,
+                    out_channels=1,
+                    out_dtype=np.uint8,
+                    image_group='images',
+                    ReaderClass=DataReaderHDF5,
+                    pad_args={'mode': 'symmetric'})
 
 
+    patch_loader = DataLoader(patch_dataset, batch_size=batch_size, num_workers=num_workers)
+    
+    t0 = time.perf_counter()
+    timing = []
+    for sample in patch_loader:
+        patch_dataset.add_processed_batch(sample)
+        t = time.perf_counter()
+        timing.append(t-t0)
+        t0 = t
+    print(f'{np.mean(timing):.5f} s')
+    print(patch_dataset.data_shape['100000'])
+    print(patch_dataset.get_assembled_data()['100000'])
+    #TODO plot it
 
-test_MedDataset()
+def main():
+    import logging
+    logging.basicConfig(level=logging.DEBUG)
+    test_GridPatchSampler()
+
+if __name__ == "__main__":
+    main()
