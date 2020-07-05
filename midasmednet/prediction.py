@@ -25,8 +25,8 @@ from midasmednet.unet.loss import expand_as_one_hot
 import random
 
 
-# todo documentation
-# todo add patch counter
+# TODO comments
+# TODO heatmap and label separation / (output logits)
 # todo add timing (s/patch, s/subject)
 def test_model(input_data_path,
                 input_group,
@@ -41,7 +41,7 @@ def test_model(input_data_path,
                 num_workers,
                 one_hot_encoded=True,
                 softmax_output=True,
-                data_reader=midasmednet.dataset.read_zarr):
+                ReaderClass=midasmednet.dataset.DataReaderHDF5):
 
     logger = logging.getLogger(__name__)
     # set parameters
@@ -72,11 +72,11 @@ def test_model(input_data_path,
     if not one_hot_encoded:
         out_channels = 1
     patch_dataset = GridPatchSampler(input_data_path,
-                                        subject_keys,
-                                        patch_size, patch_overlap,
-                                        image_group=input_group,
-                                        out_channels=out_channels,
-                                        out_dtype=np.float16)
+                                    subject_keys,
+                                    patch_size, patch_overlap,
+                                    image_group=input_group,
+                                    out_channels=out_channels,
+                                    out_dtype=np.float16)
 
     patch_loader = DataLoader(patch_dataset, batch_size=batch_size, num_workers=num_workers)
 
@@ -101,3 +101,5 @@ def test_model(input_data_path,
     
     results = patch_dataset.get_assembled_data()
     return results
+
+
