@@ -135,7 +135,7 @@ class CELoss(nn.Module):
         self.ce = nn.CrossEntropyLoss()
 
     def forward(self, inputs, targets):
-        inputs = self.normalization(inputs)
+        inputs = nn.Softmax(dim=1)(inputs)
         return self.ce(inputs, targets[:, 0, ...])
 
 class WeightedCrossEntropyLoss(nn.Module):
