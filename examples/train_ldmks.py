@@ -1,20 +1,23 @@
-from dotenv import load_dotenv
-load_dotenv()
 import os
+import logging
+
 import torch
 import numpy as np
+from dotenv import load_dotenv
 from pytorch_lightning import Trainer
-from midasmednet.dataset import MedDataset, DataReaderHDF5
-from midasmednet.unet.loss import DiceLoss
-from midasmednet.landmarks_lightning import LandmarkNet
 from torch.utils.data import DataLoader
-import logging
 from configargparse import ArgumentParser
 from pytorch_lightning import loggers
 from pytorch_lightning.logging.neptune import NeptuneLogger
-from midasmednet.utils.misc import _LOG_LEVEL_STRINGS, _log_level_string_to_int
 from batchgenerators.transforms.abstract_transforms import Compose
 from batchgenerators.transforms.color_transforms import BrightnessTransform, GammaTransform, ContrastAugmentationTransform
+
+from midasmednet.utils.misc import _LOG_LEVEL_STRINGS, _log_level_string_to_int
+from midasmednet.dataset import MedDataset, DataReaderHDF5
+from midasmednet.unet.loss import DiceLoss
+from midasmednet.landmarks_lightning import LandmarkNet
+
+load_dotenv()
 
 # replace $DATA and $MODEL in paths
 # by the values of the env variables
@@ -47,6 +50,7 @@ parser.add_argument('--patches_per_subject', type=int, default=10)
 parser.add_argument('--data_augmentation', action="store_true")
 parser.add_argument('--gpus', type=int, default=1)
 parser.add_argument('--preload', action='store_true')
+parser.add_argument('--resume', type=str)
 parser.add_argument('--max_epochs', type=int, default=100)
 parser.add_argument('--log_level', type=str, default='INFO')
 
@@ -111,10 +115,16 @@ val_ds = MedDataset(hparams.data_path,
 model = LandmarkNet(hparams,
                     train_ds, val_ds)
 
+kwargs = {}
+if hparams.resume:
+    print('loading checkpoint ...')
+    kwargs['resume_from_checkpoint'] = hparams.resume
+
 trainer = Trainer(gpus=hparams.gpus,
                 #precision=16, amp_level='O2',
                 max_epochs=hparams.max_epochs,
                 default_root_dir=hparams.model_dir,
-                logger=[tb_logger, neptune_logger])
+                logger=[tb_logger, neptune_logger],
+                **kwargs)
 trainer.fit(model)
 

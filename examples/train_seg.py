@@ -1,21 +1,24 @@
-from dotenv import load_dotenv
-load_dotenv()
 import os
+import logging
+
 import torch
 import numpy as np
 import importlib
+from dotenv import load_dotenv
+from torch.utils.data import DataLoader
+from configargparse import ArgumentParser
+from pytorch_lightning import loggers
 from pytorch_lightning import Trainer
+from pytorch_lightning.logging.neptune import NeptuneLogger
+from batchgenerators.transforms.abstract_transforms import Compose
+from batchgenerators.transforms.color_transforms import BrightnessTransform, GammaTransform, ContrastAugmentationTransform
+
+from midasmednet.utils.misc import _LOG_LEVEL_STRINGS, _log_level_string_to_int
 from midasmednet.dataset import MedDataset, DataReaderHDF5
 from midasmednet.unet.loss import DiceLoss
 from midasmednet.segmentation_lightning import SegmentationNet
-from torch.utils.data import DataLoader
-import logging
-from configargparse import ArgumentParser
-from pytorch_lightning import loggers
-from pytorch_lightning.logging.neptune import NeptuneLogger
-from midasmednet.utils.misc import _LOG_LEVEL_STRINGS, _log_level_string_to_int
-from batchgenerators.transforms.abstract_transforms import Compose
-from batchgenerators.transforms.color_transforms import BrightnessTransform, GammaTransform, ContrastAugmentationTransform
+
+load_dotenv()
 
 # replace $DATA and $MODEL in paths
 # by the values of the env variables
@@ -116,7 +119,6 @@ model = SegmentationNet(hparams,
                        training_dataset=train_ds,
                        validation_dataset=val_ds)
 
-# TODO add to landmarks
 kwargs = {}
 if hparams.resume:
     print('loading checkpoint ...')
