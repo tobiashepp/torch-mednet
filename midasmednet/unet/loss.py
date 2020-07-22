@@ -6,6 +6,7 @@ from torch import nn as nn
 from torch.autograd import Variable
 from torch.nn import MSELoss, SmoothL1Loss, L1Loss
 
+
 def flatten(tensor):
     """Flattens a given tensor such that the channel axis is first.
     The shapes are transformed as follows:
@@ -46,11 +47,13 @@ def compute_per_channel_dice(input, target, epsilon=1e-5,
     denominator = (input + target).sum(-1)
     return 2. * intersect / denominator.clamp(min=epsilon)
 
+
 def dice_metric(logits, labels):
     outputs = nn.Softmax(dim=1)(logits)
     labels = expand_as_one_hot(labels, C=outputs.size()[1])
     per_channel_dice = compute_per_channel_dice(outputs, labels)
     return per_channel_dice
+
 
 def expand_as_one_hot(input, C, ignore_index=None):
     """
