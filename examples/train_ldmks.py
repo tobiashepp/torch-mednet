@@ -15,7 +15,7 @@ from batchgenerators.transforms.color_transforms import BrightnessTransform, Gam
 from midasmednet.utils.misc import _LOG_LEVEL_STRINGS, _log_level_string_to_int
 from midasmednet.dataset import MedDataset, DataReaderHDF5
 from midasmednet.unet.loss import DiceLoss
-from midasmednet.landmarks_lightning import LandmarkNet
+from midasmednet.landmarks import LandmarkNet
 
 load_dotenv()
 

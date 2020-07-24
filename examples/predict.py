@@ -1,3 +1,4 @@
+import os
 import logging
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import zarr
 import h5py
 import hydra
 import numpy as np
+from dotenv import load_dotenv
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
@@ -13,8 +15,9 @@ from midasmednet.dataset import GridPatchSampler, DataReaderHDF5
 from midasmednet.segmentation import SegmentationNet
 from midasmednet.landmarks import LandmarkNet
 
+load_dotenv()
 
-@hydra.main(config_path='/home/raheppt1/projects/tumorvolume/config/petct.yaml', strict=False)
+@hydra.main(config_path=os.getenv('CONFIG'), strict=False)
 def predict(cfg):
     # copy over
     data_path = cfg.base.data
