@@ -2,10 +2,10 @@
 ConfigArgParse
 h5py
 zarr
-#torch
-#torchvision
+torch==1.5.1
+torchvision==0.6.1
 batchgenerators
-pytorch-lightning
+pytorch-lightning==0.9.0
 neptune-client
 visdom
 nibabel

@@ -130,18 +130,3 @@ class SegmentationNet(ResidualUNet3D):
                         batch_size=self.batch_size, 
                         num_workers=self.num_workers,
                         shuffle=False)
-    
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument("--learning_rate", type=float, default=0.001)
-        parser.add_argument("--fmaps", type=int, default=64)
-        parser.add_argument("--batch_size", type=int, default=4)
-        parser.add_argument("--num_workers", type=int, default=4)
-        parser.add_argument("--in_channels", type=int, default=1)
-        parser.add_argument("--out_channels", type=int, default=1)
-        parser.add_argument("--log_interval", type=int, default=5)
-        parser.add_argument("--log_vis_mip", type=str, choices=['mean', 'max'], default='mean')
-        parser.add_argument('--loss', choices=['DICE', 'CE'], default='DICE')
-        parser.add_argument('--loss_weight', nargs='+', type=float, default=None)
-        return parser
